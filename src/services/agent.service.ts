@@ -116,7 +116,7 @@ async function callPerplexity(prompt: string): Promise<string> {
       temperature: 0.2,
       max_tokens: 2000,
     }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(60000),
   });
 
   if (!res.ok) {
