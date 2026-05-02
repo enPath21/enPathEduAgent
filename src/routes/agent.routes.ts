@@ -130,7 +130,7 @@ router.patch('/waypoints/:id/feedback', requireApiKey, async (req: Request, res:
   }
 
   try {
-    const waypoint = await EducationWaypointModel.findOne({ _id: id, userId });
+    const waypoint = await EducationWaypointModel.findOne({ $or: [{ waypointId: id }, { _id: id }], userId }).catch(() => EducationWaypointModel.findOne({ waypointId: id, userId }));
     if (!waypoint) {
       res.status(404).json({ error: 'Waypoint not found' });
       return;

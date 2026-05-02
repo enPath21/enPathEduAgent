@@ -1,27 +1,18 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - build
-      - '-t'
-      - 'us-central1-docker.pkg.dev/enpath-app/cloud-run-source-deploy/enpath-edu-agent:$COMMIT_SHA'
-      - '-t'
-      - 'us-central1-docker.pkg.dev/enpath-app/cloud-run-source-deploy/enpath-edu-agent:latest'
-      - '.'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/enpath-app/cloud-run-source-deploy/enpath-edu-agent:$COMMIT_SHA', '-t', 'us-central1-docker.pkg.dev/enpath-app/cloud-run-source-deploy/enpath-edu-agent:latest', '.']
   - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - push
-      - '--all-tags'
-      - 'us-central1-docker.pkg.dev/enpath-app/cloud-run-source-deploy/enpath-edu-agent'
+    args: ['push', '--all-tags', 'us-central1-docker.pkg.dev/enpath-app/cloud-run-source-deploy/enpath-edu-agent']
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - run
       - deploy
       - enpath-edu-agent
-      - '--image=us-central1-docker.pkg.dev/enpath-app/cloud-run-source-deploy/enpath-edu-agent:$COMMIT_SHA'
-      - '--region=us-central1'
-      - '--platform=managed'
-      - '--port=8080'
-      - '--allow-unauthenticated'
+      - --image=us-central1-docker.pkg.dev/enpath-app/cloud-run-source-deploy/enpath-edu-agent:$COMMIT_SHA
+      - --region=us-central1
+      - --platform=managed
+      - --port=8080
+      - --allow-unauthenticated
 images:
   - 'us-central1-docker.pkg.dev/enpath-app/cloud-run-source-deploy/enpath-edu-agent'
