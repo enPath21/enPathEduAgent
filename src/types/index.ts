@@ -5,7 +5,7 @@
 // ── Agent Run ──────────────────────────────────────────────────────
 
 export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed';
-export type AgentRunTrigger = 'manual' | 'scheduled' | 'cia_notification' | 'feedback_replacement';
+export type AgentRunTrigger = 'manual' | 'scheduled' | 'cia_notification' | 'feedback_replacement' | 'add_new';
 
 export interface AgentRunInputs {
   ciaGoals: Array<{ category: string; description: string }>;

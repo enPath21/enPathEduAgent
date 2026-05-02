@@ -29,7 +29,7 @@ const agentRunSchema = new Schema<AgentRunDocument>(
     trigger: {
       type: String,
       required: true,
-      enum: ['manual', 'scheduled', 'cia_notification', 'feedback_replacement'] satisfies AgentRunTrigger[],
+      enum: ['manual', 'scheduled', 'cia_notification', 'feedback_replacement', 'add_new'] satisfies AgentRunTrigger[],
     },
 
     status: {

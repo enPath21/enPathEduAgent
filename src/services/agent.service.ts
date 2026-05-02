@@ -415,6 +415,30 @@ export async function runAgentForUser(
         }
         rawWaypoints = rawWaypoints! || [];
       }
+    } else if (trigger === 'add_new') {
+      // Add New — fetch already-accepted waypoints and suggest NEW/DIFFERENT ones
+      const acceptedWaypoints = await EducationWaypointModel.find({ userId, status: 'accepted' }).lean();
+      const acceptedLines = acceptedWaypoints.length > 0
+        ? acceptedWaypoints.map(w => `- ${w.credentialName} (${w.credentialType}, ~${w.projectedYear})`).join('\n')
+        : 'None yet.';
+
+      const basePrompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext);
+      const addNewPrompt = basePrompt +
+        `\n\nUSER'S ALREADY ACCEPTED CREDENTIALS:\n${acceptedLines}\n\n` +
+        `IMPORTANT: The user wants NEW education ideas. Do NOT suggest anything similar to the already-accepted credentials above. ` +
+        `Suggest 2-3 DIFFERENT credential archetypes that complement but do not duplicate the existing pathway. ` +
+        `Focus on adjacent skills, emerging areas, or credential types not yet covered. ` +
+        `Return ONLY a valid JSON array.`;
+
+      rawWaypoints = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const content = await callPerplexity(
+          attempt === 0 ? addNewPrompt : addNewPrompt + '\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a valid JSON array.',
+        );
+        rawWaypoints = parseWaypointResponse(content);
+        if (rawWaypoints.length > 0) break;
+        log.warn({ attempt }, 'Failed to parse add_new response — retrying');
+      }
     } else {
       // Full run — generate 3-5 waypoints
       let content = '';
