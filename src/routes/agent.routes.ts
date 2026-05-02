@@ -45,12 +45,13 @@ router.post('/run/:userId', requireApiKey, async (req: Request, res: Response) =
   const { userId } = req.params;
   const trigger = req.body?.trigger || 'manual';
   const credentialTypes: string[] = req.body?.credentialTypes || [];
+  const lastAcceptedYear: number | undefined = req.body?.lastAcceptedYear;
 
   try {
     const queue = getAgentQueue();
     const job = await queue.add(
       'run-agent',
-      { userId, trigger, credentialTypes },
+      { userId, trigger, credentialTypes, lastAcceptedYear },
       {
         attempts: 2,
         backoff: { type: 'fixed', delay: 10000 },
@@ -487,17 +488,28 @@ router.post('/waypoints/replace-with-suggestion', requireApiKey, async (req: Req
 // ── GET /api/agent/education-matches/:userId ────────────────────
 router.get('/education-matches/:userId', requireApiKey, async (req: Request, res: Response) => {
   const { userId } = req.params;
+  const waypointId = (req.query.waypointId as string) || '';
 
   try {
-    // 1. Get accepted waypoints
-    const waypoints = await EducationWaypointModel.find(
-      { userId, status: 'accepted' },
-      { credentialName: 1, institution: 1, credentialType: 1, projectedYear: 1, position: 1,
-        tuitionMin: 1, tuitionMax: 1, deliveryMode: 1, location: 1, rationale: 1, confidence: 1 },
-    )
-      .sort({ position: 1 })
-      .limit(3)
-      .lean();
+    // 1. Get accepted waypoints — filter to single waypoint if waypointId provided, else top 3
+    let waypoints;
+    if (waypointId) {
+      waypoints = await EducationWaypointModel.find(
+        { userId, status: 'accepted', $or: [{ waypointId }, { _id: waypointId }] },
+        { credentialName: 1, institution: 1, credentialType: 1, projectedYear: 1, position: 1,
+          tuitionMin: 1, tuitionMax: 1, deliveryMode: 1, location: 1, rationale: 1, confidence: 1 },
+      )
+        .lean();
+    } else {
+      waypoints = await EducationWaypointModel.find(
+        { userId, status: 'accepted' },
+        { credentialName: 1, institution: 1, credentialType: 1, projectedYear: 1, position: 1,
+          tuitionMin: 1, tuitionMax: 1, deliveryMode: 1, location: 1, rationale: 1, confidence: 1 },
+      )
+        .sort({ position: 1 })
+        .limit(3)
+        .lean();
+    }
 
     const waypointSummaries = waypoints.map(w => ({
       credentialName: w.credentialName,

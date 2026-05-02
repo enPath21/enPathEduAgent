@@ -353,6 +353,7 @@ export async function runAgentForUser(
   trigger: AgentRunTrigger = 'manual',
   replacingWaypointId?: string,
   credentialTypes: string[] = [],
+  lastAcceptedYear?: number,
 ): Promise<{ runId: string; waypointCount: number }> {
   const startedAt = new Date();
 
@@ -431,6 +432,9 @@ export async function runAgentForUser(
         `Focus on adjacent skills, emerging areas, or credential types not yet covered. ` +
         (credentialTypes.length > 0
           ? `The user specifically wants suggestions of the following credential type(s): ${credentialTypes.join(', ')}. Only suggest credentials of these types. `
+          : '') +
+        (lastAcceptedYear
+          ? `\nAll new waypoints MUST have projectedYear strictly greater than ${lastAcceptedYear}. Start the first new waypoint at ${lastAcceptedYear + 1} or later.\n`
           : '') +
         `Return ONLY a valid JSON array.`;
 

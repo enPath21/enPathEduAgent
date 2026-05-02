@@ -98,6 +98,7 @@ export interface EducationMatch {
   url: string | null;
   description: string;
   tags: string[];
+  waypointCredential?: string;
 }
 
 // ── Raw waypoint data from Perplexity ──────────────────────────────

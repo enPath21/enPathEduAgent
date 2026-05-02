@@ -78,7 +78,7 @@ function buildEducationMatchPrompt(
 ): string {
   const lines: string[] = [];
 
-  lines.push('Find 3-4 real, currently-enrolling education programs for this candidate. Respond with ONLY a JSON array — no markdown, no explanation.');
+  lines.push('Find 5-8 real, currently-enrolling education programs for this candidate (2-3 programs per credential, 5-8 total). Respond with ONLY a JSON array — no markdown, no explanation.');
   lines.push('');
 
   lines.push('## Candidate');
@@ -89,17 +89,19 @@ function buildEducationMatchPrompt(
   if (profile.location)         lines.push(`- Location: ${profile.location}`);
   lines.push('');
 
-  lines.push('## Target Credential');
+  lines.push('## Target Credentials');
   if (waypoints.length > 0) {
-    const next = waypoints[0]!;
-    lines.push('Find programs that match this target spec as closely as possible:');
-    lines.push(`- Credential: ${next.credentialName}`);
-    lines.push(`- Type: ${next.credentialType}`);
-    if (next.institution)   lines.push(`- Target institution: ${next.institution}`);
-    if (next.deliveryMode)  lines.push(`- Preferred delivery: ${next.deliveryMode}`);
-    if (next.location)      lines.push(`- Preferred location: ${next.location || profile.location || 'any'}`);
-    if (next.tuitionMin && next.tuitionMax) {
-      lines.push(`- Budget: $${next.tuitionMin.toLocaleString()} – $${next.tuitionMax.toLocaleString()}`);
+    lines.push('Find programs that match these target specs. Suggest 2-3 programs per credential:');
+    for (const wp of waypoints) {
+      lines.push('');
+      lines.push(`### ${wp.credentialName}`);
+      lines.push(`- Type: ${wp.credentialType}`);
+      if (wp.institution)   lines.push(`- Target institution: ${wp.institution}`);
+      if (wp.deliveryMode)  lines.push(`- Preferred delivery: ${wp.deliveryMode}`);
+      if (wp.location)      lines.push(`- Preferred location: ${wp.location || profile.location || 'any'}`);
+      if (wp.tuitionMin && wp.tuitionMax) {
+        lines.push(`- Budget: $${wp.tuitionMin.toLocaleString()} – $${wp.tuitionMax.toLocaleString()}`);
+      }
     }
   } else {
     lines.push('Find programs that advance the candidate to the next level in their field.');
@@ -133,7 +135,8 @@ function buildEducationMatchPrompt(
   lines.push('    "matchPct": 85,');
   lines.push('    "url": "https://..." or null,');
   lines.push('    "description": "1-2 sentence program overview",');
-  lines.push('    "tags": ["tag1", "tag2"]');
+  lines.push('    "tags": ["tag1", "tag2"],');
+  lines.push('    "waypointCredential": "name of the target credential this program matches"');
   lines.push('  }');
   lines.push(']');
 
@@ -149,7 +152,7 @@ function parseEducationMatches(content: string): EducationMatch[] {
 
     return arr
       .filter((m: Record<string, unknown>) => m && m.credentialName && m.institution)
-      .slice(0, 4)
+      .slice(0, 8)
       .map((m: Record<string, unknown>) => {
         const rawMin = Number(m.tuitionMin) || 0;
         const rawMax = Number(m.tuitionMax) || 0;
@@ -171,6 +174,7 @@ function parseEducationMatches(content: string): EducationMatch[] {
           url: typeof m.url === 'string' && m.url.startsWith('http') ? m.url : null,
           description: String(m.description || ''),
           tags: Array.isArray(m.tags) ? m.tags.map(String).slice(0, 4) : [],
+          waypointCredential: typeof m.waypointCredential === 'string' ? m.waypointCredential : undefined,
         };
       });
   } catch (err) {
