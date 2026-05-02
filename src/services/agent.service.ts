@@ -107,8 +107,8 @@ async function callPerplexity(prompt: string): Promise<string> {
         {
           role: 'system',
           content:
-            'You are an Education Intelligence Agent. You research real, currently-available education programs ' +
-            'and generate personalized education pathways. ' +
+            'You are an Education Intelligence Agent. You generate personalized education pathway archetypes — ' +
+            'generic credential types, NOT specific programs at specific institutions. ' +
             'Always respond with valid JSON only — no markdown, no explanation outside the JSON.',
         },
         { role: 'user', content: prompt },
@@ -139,7 +139,7 @@ function buildEducationPathwayPrompt(
 ): string {
   const eduLines = educationHistory.length > 0
     ? educationHistory.map(e =>
-        `- ${e.degree || e.credentialName || 'Unknown'} from ${e.institution || 'Unknown'} (${e.fieldOfStudy || 'General'}, ${e.yearCompleted || e.graduationYear || 'N/A'})`
+        `- ${e.degree || e.credentialName || 'Unknown'} (${e.fieldOfStudy || 'General'}, ${e.yearCompleted || e.graduationYear || 'N/A'})`
       ).join('\n')
     : 'No formal education history recorded.';
 
@@ -168,12 +168,12 @@ CIA EDUCATION GOALS:
 ${goalsLines}
 
 Generate 3-5 education waypoints that bridge from their current education to their career goals.
-Each must be a REAL, currently-available program. Return ONLY valid JSON array:
+Each waypoint is a credential ARCHETYPE — the TYPE of credential, not a specific program. Return ONLY valid JSON array:
 [{
   "credentialName": "Master of Science in Data Analytics",
-  "institution": "Georgia Institute of Technology",
+  "institution": "",
   "credentialType": "degree",
-  "location": "Atlanta, GA or Remote",
+  "location": "",
   "deliveryMode": "online",
   "projectedYear": 2027,
   "durationMonths": 24,
@@ -183,19 +183,22 @@ Each must be a REAL, currently-available program. Return ONLY valid JSON array:
   "salaryRoiPerYear": 18000,
   "rationale": "One sentence why this fits the user's career trajectory",
   "confidence": 0.85,
-  "url": "https://pe.gatech.edu/degrees/analytics",
+  "url": "",
   "financialAid": true,
   "tags": ["Data Analytics", "Online", "STEM"]
 }]
 
 IMPORTANT RULES:
-- Each waypoint must be a REAL program at a REAL institution
-- Include actual URLs to program pages where possible
+- Do NOT include any specific institution, provider, school, or company name. Waypoints describe the TYPE of credential the user should pursue, not where to get it.
+- credentialName should be a generic archetype like "Cloud Architecture Certification", "Master of Science in Data Science", "Full-Stack Web Development Bootcamp" — never a branded name like "AWS SAA-C03" or "Georgia Tech OMSA"
+- institution must always be an empty string
+- url must always be an empty string
 - credentialType must be one of: degree, certification, bootcamp, course, other
 - deliveryMode must be one of: online, in-person, hybrid, flexible
 - salaryImpactPct is the estimated % salary increase after completing this credential
 - salaryRoiPerYear is the estimated annual additional earnings from this credential
-- tuitionMin/tuitionMax should reflect actual program costs
+- tuitionMin/tuitionMax should reflect typical market costs for this type of credential
+- Space projectedYear values to account for duration. If a waypoint has durationMonths=24, the next waypoint's projectedYear must be at least 2 years after this one's projectedYear. Stack sequentially — no two waypoints should start in the same year unless one completes before the other begins.
 - Order waypoints chronologically by projected completion year
 - Ensure logical progression — don't suggest an advanced degree before prerequisites`;
 }
@@ -209,7 +212,7 @@ function parseWaypointResponse(content: string): RawEducationWaypoint[] {
     const arr = Array.isArray(parsed) ? parsed : [parsed];
 
     return arr
-      .filter((w: Record<string, unknown>) => w && w.credentialName && w.institution)
+      .filter((w: Record<string, unknown>) => w && w.credentialName)
       .map((w: Record<string, unknown>, i: number) => {
         const tuitionMin = Number(w.tuitionMin) || 0;
         const tuitionMax = Number(w.tuitionMax) || 0;
@@ -395,7 +398,7 @@ export async function runAgentForUser(
         rawWaypoints = [];
       } else {
         const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext) +
-          `\n\nIMPORTANT: The user rejected "${rejected.credentialName}" at "${rejected.institution}". ` +
+          `\n\nIMPORTANT: The user rejected "${rejected.credentialName}". ` +
           `Generate exactly 1 replacement credential for position ${rejected.position} that is meaningfully different. ` +
           `Return a JSON array with exactly 1 element.`;
 
@@ -490,7 +493,7 @@ export async function runAgentForUser(
           userId,
           type: 'pathway_regenerated',
           subject: 'Education Pathway Updated',
-          detail: `An education waypoint was replaced. Removed: ${rejected?.credentialName || 'Unknown'} at ${rejected?.institution || 'Unknown'}. Added: ${newWp?.credentialName || 'Unknown'} at ${newWp?.institution || 'Unknown'}.`,
+          detail: `An education waypoint was replaced. Removed: ${rejected?.credentialName || 'Unknown'}. Added: ${newWp?.credentialName || 'Unknown'}.`,
           action: 'Education pathway updated.',
           source: 'eia',
           data: {
