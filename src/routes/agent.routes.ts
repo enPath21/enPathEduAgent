@@ -115,10 +115,11 @@ router.get('/runs/:userId', requireApiKey, async (req: Request, res: Response) =
 // ── PATCH /api/agent/waypoints/:id/feedback ─────────────────────
 router.patch('/waypoints/:id/feedback', requireApiKey, async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { action, note, userId } = req.body as {
+  const { action, note, userId, projectedYear } = req.body as {
     action: 'accept' | 'decline';
     note?: string;
     userId: string;
+    projectedYear?: number;
   };
 
   if (!action || !['accept', 'decline'].includes(action)) {
@@ -139,6 +140,9 @@ router.patch('/waypoints/:id/feedback', requireApiKey, async (req: Request, res:
 
     if (action === 'accept') {
       waypoint.status = 'accepted';
+      if (projectedYear !== undefined && projectedYear !== null) {
+        waypoint.projectedYear = projectedYear;
+      }
       await waypoint.save();
       log.info({ id, userId }, 'Waypoint accepted');
       res.json({ success: true, status: 'accepted' });
