@@ -427,7 +427,7 @@ export async function runAgentForUser(
       const addNewPrompt = basePrompt +
         `\n\nUSER'S ALREADY ACCEPTED CREDENTIALS:\n${acceptedLines}\n\n` +
         `IMPORTANT: The user wants NEW education ideas. Do NOT suggest anything similar to the already-accepted credentials above. ` +
-        `Suggest 2-3 DIFFERENT credential archetypes that complement but do not duplicate the existing pathway. ` +
+        `You MUST suggest exactly 3 DIFFERENT credential archetypes that complement but do not duplicate the existing pathway. Your JSON array MUST contain exactly 3 objects. Do NOT return fewer than 3. ` +
         `Focus on adjacent skills, emerging areas, or credential types not yet covered. ` +
         (credentialTypes.length > 0
           ? `The user specifically wants suggestions of the following credential type(s): ${credentialTypes.join(', ')}. Only suggest credentials of these types. `
@@ -437,7 +437,7 @@ export async function runAgentForUser(
       rawWaypoints = [];
       for (let attempt = 0; attempt < 2; attempt++) {
         const content = await callPerplexity(
-          attempt === 0 ? addNewPrompt : addNewPrompt + '\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a valid JSON array.',
+          attempt === 0 ? addNewPrompt : addNewPrompt + '\n\nCRITICAL: Return EXACTLY 3 waypoint objects in your JSON array. Not 1, not 2 — exactly 3.\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a valid JSON array.',
         );
         rawWaypoints = parseWaypointResponse(content);
         if (rawWaypoints.length > 0) break;
