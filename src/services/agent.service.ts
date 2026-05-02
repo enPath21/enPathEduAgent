@@ -402,6 +402,7 @@ export async function runAgentForUser(
         const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext) +
           `\n\nIMPORTANT: The user rejected "${rejected.credentialName}". ` +
           `Generate exactly 1 replacement credential for position ${rejected.position} that is meaningfully different. ` +
+          `The replacement MUST use projectedYear = ${rejected.projectedYear} (do NOT change the year — the user assigned this slot). ` +
           `Return a JSON array with exactly 1 element.`;
 
         let content = '';
@@ -411,7 +412,8 @@ export async function runAgentForUser(
           );
           const parsed = parseWaypointResponse(content);
           if (parsed.length > 0) {
-            rawWaypoints = [{ ...parsed[0], position: rejected.position }];
+            // Always lock to the declined waypoint's projectedYear — never let Perplexity reassign it
+            rawWaypoints = [{ ...parsed[0], position: rejected.position, projectedYear: rejected.projectedYear }];
             break;
           }
         }
