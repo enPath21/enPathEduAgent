@@ -44,12 +44,13 @@ function getAgentQueue(): Queue {
 router.post('/run/:userId', requireApiKey, async (req: Request, res: Response) => {
   const { userId } = req.params;
   const trigger = req.body?.trigger || 'manual';
+  const credentialTypes: string[] = req.body?.credentialTypes || [];
 
   try {
     const queue = getAgentQueue();
     const job = await queue.add(
       'run-agent',
-      { userId, trigger },
+      { userId, trigger, credentialTypes },
       {
         attempts: 2,
         backoff: { type: 'fixed', delay: 10000 },

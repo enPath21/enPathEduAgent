@@ -196,7 +196,7 @@ IMPORTANT RULES:
 - credentialType must be one of: degree, certification, bootcamp, course, other
 - deliveryMode must be one of: online, in-person, hybrid, flexible
 - salaryImpactPct is the estimated % salary increase after completing this credential
-- salaryRoiPerYear is the estimated annual additional earnings from this credential
+- salaryRoiPerYear is the estimated annual additional earnings from this credential, based on real industry salary data for the user's career field and target role. Use current market benchmarks (BLS data, industry surveys) — factor in the user's industry, seniority level implied by their career waypoints, and regional norms. This should reflect what professionals with this credential actually earn MORE than those without it in the same field, not a generic number.
 - tuitionMin/tuitionMax should reflect typical market costs for this type of credential
 - Space projectedYear values to account for duration. If a waypoint has durationMonths=24, the next waypoint's projectedYear must be at least 2 years after this one's projectedYear. Stack sequentially — no two waypoints should start in the same year unless one completes before the other begins.
 - Order waypoints chronologically by projected completion year
@@ -352,6 +352,7 @@ export async function runAgentForUser(
   userId: string,
   trigger: AgentRunTrigger = 'manual',
   replacingWaypointId?: string,
+  credentialTypes: string[] = [],
 ): Promise<{ runId: string; waypointCount: number }> {
   const startedAt = new Date();
 
@@ -428,6 +429,9 @@ export async function runAgentForUser(
         `IMPORTANT: The user wants NEW education ideas. Do NOT suggest anything similar to the already-accepted credentials above. ` +
         `Suggest 2-3 DIFFERENT credential archetypes that complement but do not duplicate the existing pathway. ` +
         `Focus on adjacent skills, emerging areas, or credential types not yet covered. ` +
+        (credentialTypes.length > 0
+          ? `The user specifically wants suggestions of the following credential type(s): ${credentialTypes.join(', ')}. Only suggest credentials of these types. `
+          : '') +
         `Return ONLY a valid JSON array.`;
 
       rawWaypoints = [];

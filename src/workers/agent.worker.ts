@@ -18,20 +18,21 @@ const log = createLogger('agent-worker');
 
 export interface AgentJobData {
   userId: string;
-  trigger: 'manual' | 'scheduled' | 'cia_notification' | 'feedback_replacement';
+  trigger: 'manual' | 'scheduled' | 'cia_notification' | 'feedback_replacement' | 'add_new';
   replacingWaypointId?: string;
+  credentialTypes?: string[];
 }
 
 export function startAgentWorker(): Worker<AgentJobData> {
   const worker = new Worker<AgentJobData>(
     'edu-agent',
     async (job: Job<AgentJobData>) => {
-      const { userId, trigger, replacingWaypointId } = job.data;
+      const { userId, trigger, replacingWaypointId, credentialTypes } = job.data;
 
       log.info({ jobId: job.id, userId, trigger }, 'Processing agent job');
 
       try {
-        const result = await runAgentForUser(userId, trigger, replacingWaypointId);
+        const result = await runAgentForUser(userId, trigger, replacingWaypointId, credentialTypes);
         log.info({ jobId: job.id, ...result }, 'Agent job completed');
         return result;
       } catch (err) {
