@@ -491,11 +491,12 @@ router.get('/education-matches/:userId', requireApiKey, async (req: Request, res
   const waypointId = (req.query.waypointId as string) || '';
 
   try {
-    // 1. Get accepted waypoints — filter to single waypoint if waypointId provided, else top 3
+    // 1. Get waypoints — when a specific waypointId is provided, find that waypoint regardless of
+    //    status (user may click "Show potential providers" on a pending item). Otherwise top 3 accepted.
     let waypoints;
     if (waypointId) {
       waypoints = await EducationWaypointModel.find(
-        { userId, status: 'accepted', $or: [{ waypointId }, { _id: waypointId }] },
+        { userId, $or: [{ waypointId }, { _id: waypointId }] },
         { credentialName: 1, institution: 1, credentialType: 1, projectedYear: 1, position: 1,
           tuitionMin: 1, tuitionMax: 1, deliveryMode: 1, location: 1, rationale: 1, confidence: 1 },
       )

@@ -78,7 +78,7 @@ function buildEducationMatchPrompt(
 ): string {
   const lines: string[] = [];
 
-  lines.push('Find 5-8 real, currently-enrolling education programs for this candidate (2-3 programs per credential, 5-8 total). Respond with ONLY a JSON array — no markdown, no explanation.');
+  lines.push('Find 6-8 real, currently-enrolling education programs for this candidate (2-3 programs per credential). You MUST return at least 6 programs in the JSON array. Respond with ONLY a JSON array — no markdown, no explanation.');
   lines.push('');
 
   lines.push('## Candidate');
@@ -104,8 +104,10 @@ function buildEducationMatchPrompt(
       }
     }
   } else {
-    lines.push('Find programs that advance the candidate to the next level in their field.');
-    if (profile.location) lines.push(`- Preferred location: ${profile.location}`);
+    lines.push('Find 6-8 programs that would most advance this candidate toward their education goals.');
+    lines.push('Use the Education Goals below to determine the most relevant credential types and fields.');
+    if (profile.location) lines.push(`- Preferred location: ${profile.location || 'any'}`);
+    lines.push('You MUST return at least 6 programs. Do not return fewer than 6.');
   }
   lines.push('');
 
