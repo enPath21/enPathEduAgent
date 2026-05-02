@@ -495,8 +495,10 @@ router.get('/education-matches/:userId', requireApiKey, async (req: Request, res
     //    status (user may click "Show potential providers" on a pending item). Otherwise top 3 accepted.
     let waypoints;
     if (waypointId) {
+      // waypointId from frontend is always a UUID string — never a Mongo ObjectId.
+      // Querying { _id: uuid } throws a Mongoose CastError. Query by waypointId field only.
       waypoints = await EducationWaypointModel.find(
-        { userId, $or: [{ waypointId }, { _id: waypointId }] },
+        { userId, waypointId },
         { credentialName: 1, institution: 1, credentialType: 1, projectedYear: 1, position: 1,
           tuitionMin: 1, tuitionMax: 1, deliveryMode: 1, location: 1, rationale: 1, confidence: 1 },
       )
