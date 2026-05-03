@@ -72,6 +72,7 @@ export interface UserProfile {
   institution?: string;
   fieldOfStudy?: string;
   location?: string;
+  geoDataSource?: string;
 }
 
 // ── CIA Context ────────────────────────────────────────────────────

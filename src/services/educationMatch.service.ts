@@ -86,7 +86,9 @@ function buildEducationMatchPrompt(
   if (profile.highestDegree)    lines.push(`- Highest degree: ${profile.highestDegree}`);
   if (profile.institution)      lines.push(`- Institution: ${profile.institution}`);
   if (profile.fieldOfStudy)     lines.push(`- Field of study: ${profile.fieldOfStudy}`);
-  if (profile.location)         lines.push(`- Location: ${profile.location}`);
+  const researchMarket = profile.geoDataSource || profile.location;
+  if (researchMarket) lines.push(`- Research Market (where to find programs): ${researchMarket}`);
+  if (profile.location && profile.location !== researchMarket) lines.push(`- Current Location: ${profile.location}`);
   lines.push('');
 
   lines.push('## Target Credentials');
@@ -98,7 +100,7 @@ function buildEducationMatchPrompt(
       lines.push(`- Type: ${wp.credentialType}`);
       if (wp.institution)   lines.push(`- Target institution: ${wp.institution}`);
       if (wp.deliveryMode)  lines.push(`- Preferred delivery: ${wp.deliveryMode}`);
-      if (wp.location)      lines.push(`- Preferred location: ${wp.location || profile.location || 'any'}`);
+      if (wp.location)      lines.push(`- Preferred location: ${wp.location || profile.geoDataSource || profile.location || 'any'}`);
       if (wp.tuitionMin && wp.tuitionMax) {
         lines.push(`- Budget: $${wp.tuitionMin.toLocaleString()} – $${wp.tuitionMax.toLocaleString()}`);
       }
@@ -106,7 +108,8 @@ function buildEducationMatchPrompt(
   } else {
     lines.push('Find 6-8 programs that would most advance this candidate toward their education goals.');
     lines.push('Use the Education Goals below to determine the most relevant credential types and fields.');
-    if (profile.location) lines.push(`- Preferred location: ${profile.location || 'any'}`);
+    const fallbackLocation = profile.geoDataSource || profile.location;
+    if (fallbackLocation) lines.push(`- Preferred location: ${fallbackLocation}`);
     lines.push('You MUST return at least 6 programs. Do not return fewer than 6.');
   }
   lines.push('');
