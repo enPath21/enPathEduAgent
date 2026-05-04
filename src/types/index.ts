@@ -133,4 +133,6 @@ export interface RawEducationWaypoint {
   priority?: 1 | 2 | 3;
   unlocksJobPosition?: number;
   sequenceRationale?: string;
+  userStartDate?: string;
+  userEndDate?: string;
 }

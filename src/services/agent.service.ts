@@ -202,7 +202,7 @@ Return ONLY valid JSON array:
   "priority": 1,
   "unlocksJobPosition": 1,
   "sequenceRationale": "The CSCP is listed as preferred or required in 62% of Senior Supply Chain Manager job postings; completing it before applying for Position 1 (2028) increases interview conversion by ~2x.",
-  "rationale": "Bridges current operations role to Senior Manager with a credential hiring managers actively screen for.",
+  "rationale": "",
   "confidence": 0.88,
   "url": "",
   "financialAid": false,
@@ -217,7 +217,8 @@ FIELD RULES:
 - deliveryMode: one of: online, in-person, hybrid, flexible
 - priority: 1 = required to unlock next career waypoint, 2 = strongly recommended, 3 = optional enhancement
 - unlocksJobPosition: the career waypoint position number (1–5) this credential is most critical for unlocking. Use null if supplemental.
-- sequenceRationale: 1-2 sentences citing a REAL industry pattern (% of job postings, hiring manager surveys, BLS data) explaining WHY this credential at this point in the sequence
+- sequenceRationale: One sentence only. State concisely why this credential comes at this point in the career path.
+- rationale: Always return an empty string "". Do not generate any rationale text.
 - salaryImpactPct: estimated % salary increase from this credential based on real BLS/industry data for this field
 - salaryRoiPerYear: estimated annual earnings increase for professionals with vs. without this credential in this specific field
 - tuitionMin/tuitionMax: typical market costs for this credential type
@@ -494,6 +495,24 @@ export async function runAgentForUser(
 
     run.perplexityCallCount = 1;
 
+    // 3a. Assign MM/YYYY suggested dates using durationMonths cursor (priority-ordered)
+    //     Only fills in dates not already set by the user.
+    const _addMonths = (y: number, m: number, n: number) => {
+      const total = (m - 1) + n;
+      return { year: y + Math.floor(total / 12), month: (total % 12) + 1 };
+    };
+    const _fmt = (y: number, m: number) => `${String(m).padStart(2, '0')}/${y}`;
+    const _nowYear = new Date().getFullYear();
+    const _nowMonth = new Date().getMonth() + 1;
+    let _cursor = { year: _nowYear, month: _nowMonth };
+    for (const raw of rawWaypoints) {
+      const durMo = Math.max(6, raw.durationMonths ?? 12);
+      if (!raw.userStartDate) raw.userStartDate = _fmt(_cursor.year, _cursor.month);
+      const _end = _addMonths(_cursor.year, _cursor.month, durMo);
+      if (!raw.userEndDate) raw.userEndDate = _fmt(_end.year, _end.month);
+      _cursor = _addMonths(_end.year, _end.month, 1);
+    }
+
     // 3. Save waypoints to MongoDB
     const savedIds: string[] = [];
     for (const raw of rawWaypoints) {
@@ -524,6 +543,8 @@ export async function runAgentForUser(
         priority:           raw.priority ?? null,
         unlocksJobPosition: raw.unlocksJobPosition ?? null,
         sequenceRationale:  raw.sequenceRationale ?? null,
+        userStartDate:      raw.userStartDate ?? null,
+        userEndDate:        raw.userEndDate ?? null,
       });
       savedIds.push(String(wp._id));
     }
