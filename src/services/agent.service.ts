@@ -143,9 +143,12 @@ function buildEducationPathwayPrompt(
       ).join('\n')
     : 'No formal education history recorded.';
 
+  // Format career waypoints with enough detail for the EIA to reason about
+  // which credentials unlock which job positions
   const careerLines = careerWaypoints.length > 0
     ? careerWaypoints.map((w: Record<string, unknown>) =>
-        `- Position ${w.position}: ${w.jobTitle || w.title} at ${w.company || 'TBD'} (${w.projectedYear}, $${w.salaryMidpoint || 'N/A'})`
+        `- Position ${w.position}: ${w.jobTitle || w.title} at ${w.company || 'TBD'} (${w.projectedYear}, $${w.salaryMidpoint || 'N/A'})` +
+        (w.sequenceRationale ? ` [Why this role: ${w.sequenceRationale}]` : '')
       ).join('\n')
     : 'No career waypoints mapped yet.';
 
@@ -156,7 +159,7 @@ function buildEducationPathwayPrompt(
         .join('\n') || 'No active education goals.'
     : 'No education goals recorded.';
 
-  return `You are an Education Intelligence Agent. Analyze this user's background and generate a personalized education pathway.
+  return `You are an Education Intelligence Agent. Analyze this user's background and generate a personalized, intelligently-sequenced education pathway.
 
 CURRENT EDUCATION HISTORY:
 ${eduLines}
@@ -167,40 +170,60 @@ ${careerLines}
 CIA EDUCATION GOALS:
 ${goalsLines}
 
-Generate 3-5 education waypoints that bridge from their current education to their career goals.
-Each waypoint is a credential ARCHETYPE — the TYPE of credential, not a specific program. Return ONLY valid JSON array:
+## Your Task — Two-Phase Reasoning
+
+PHASE 1 — Credential Type Decision (reason through this before picking credentials):
+For each career waypoint above, determine:
+1. What TYPE of credential is most impactful at this stage: degree (long-term, high-ROI for senior/exec roles), certification (fastest ROI, unlocks specific technical roles), bootcamp (practical skills, 3-6 months), or course (supplemental, low-cost)?
+2. Which credential is a HARD REQUIREMENT to be considered for that role (priority 1) vs. strongly recommended (priority 2) vs. optional enhancement (priority 3)?
+3. Is there a credential that must be completed BEFORE another one (prerequisite ordering)?
+
+For example:
+- If Position 1 requires a PMP or supply chain cert to stand out, that’s priority=1 and unlocksJobPosition=1
+- If a degree is needed only for Position 3+, schedule it to complete before Position 3's projectedYear
+- Certs and short courses can often be done in parallel; degrees cannot
+
+PHASE 2 — Generate 3-5 education waypoints based on Phase 1 reasoning.
+Each waypoint is a credential ARCHETYPE — the TYPE of credential, not a specific program.
+
+Return ONLY valid JSON array:
 [{
-  "credentialName": "Master of Science in Data Analytics",
+  "credentialName": "Certified Supply Chain Professional (CSCP)",
   "institution": "",
-  "credentialType": "degree",
+  "credentialType": "certification",
   "location": "",
   "deliveryMode": "online",
   "projectedYear": 2027,
-  "durationMonths": 24,
-  "tuitionMin": 7000,
-  "tuitionMax": 10000,
-  "salaryImpactPct": 85,
-  "salaryRoiPerYear": 18000,
-  "rationale": "One sentence why this fits the user's career trajectory",
-  "confidence": 0.85,
+  "durationMonths": 6,
+  "tuitionMin": 1500,
+  "tuitionMax": 2500,
+  "salaryImpactPct": 15,
+  "salaryRoiPerYear": 8000,
+  "priority": 1,
+  "unlocksJobPosition": 1,
+  "sequenceRationale": "The CSCP is listed as preferred or required in 62% of Senior Supply Chain Manager job postings; completing it before applying for Position 1 (2028) increases interview conversion by ~2x.",
+  "rationale": "Bridges current operations role to Senior Manager with a credential hiring managers actively screen for.",
+  "confidence": 0.88,
   "url": "",
-  "financialAid": true,
-  "tags": ["Data Analytics", "Online", "STEM"]
+  "financialAid": false,
+  "tags": ["Supply Chain", "Certification", "APICS"]
 }]
 
-IMPORTANT RULES:
-- Do NOT include any specific institution, provider, school, or company name. Waypoints describe the TYPE of credential the user should pursue, not where to get it.
-- credentialName should be a generic archetype like "Cloud Architecture Certification", "Master of Science in Data Science", "Full-Stack Web Development Bootcamp" — never a branded name like "AWS SAA-C03" or "Georgia Tech OMSA"
-- institution must always be an empty string
-- url must always be an empty string
-- credentialType must be one of: degree, certification, bootcamp, course, other
-- deliveryMode must be one of: online, in-person, hybrid, flexible
-- salaryImpactPct is the estimated % salary increase after completing this credential
-- salaryRoiPerYear is the estimated annual additional earnings from this credential, based on real industry salary data for the user's career field and target role. Use current market benchmarks (BLS data, industry surveys) — factor in the user's industry, seniority level implied by their career waypoints, and regional norms. This should reflect what professionals with this credential actually earn MORE than those without it in the same field, not a generic number.
-- tuitionMin/tuitionMax should reflect typical market costs for this type of credential
-- Space projectedYear values to account for duration. If a waypoint has durationMonths=24, the next waypoint's projectedYear must be at least 2 years after this one's projectedYear. Stack sequentially — no two waypoints should start in the same year unless one completes before the other begins.
-- Order waypoints chronologically by projected completion year
-- Ensure logical progression — don't suggest an advanced degree before prerequisites`;
+FIELD RULES:
+- credentialName: generic archetype like "Cloud Architecture Certification" or "Master of Science in Data Science" — never a branded product name
+- institution: always empty string
+- url: always empty string
+- credentialType: one of: degree, certification, bootcamp, course, other
+- deliveryMode: one of: online, in-person, hybrid, flexible
+- priority: 1 = required to unlock next career waypoint, 2 = strongly recommended, 3 = optional enhancement
+- unlocksJobPosition: the career waypoint position number (1–5) this credential is most critical for unlocking. Use null if supplemental.
+- sequenceRationale: 1-2 sentences citing a REAL industry pattern (% of job postings, hiring manager surveys, BLS data) explaining WHY this credential at this point in the sequence
+- salaryImpactPct: estimated % salary increase from this credential based on real BLS/industry data for this field
+- salaryRoiPerYear: estimated annual earnings increase for professionals with vs. without this credential in this specific field
+- tuitionMin/tuitionMax: typical market costs for this credential type
+- projectedYear ordering: space out years to account for durationMonths. No overlap unless certs are truly self-paced and can run parallel.
+- Logical prerequisite ordering: never place an advanced degree before the foundational cert that gates entry to the field
+- Order waypoints by priority first (1s before 2s before 3s), then by projectedYear within each priority tier`;
 }
 
 // ── Parse Perplexity response ───────────────────────────────────
@@ -216,6 +239,8 @@ function parseWaypointResponse(content: string): RawEducationWaypoint[] {
       .map((w: Record<string, unknown>, i: number) => {
         const tuitionMin = Number(w.tuitionMin) || 0;
         const tuitionMax = Number(w.tuitionMax) || 0;
+        const rawPriority = Number(w.priority);
+        const priority = ([1, 2, 3].includes(rawPriority) ? rawPriority : null) as 1 | 2 | 3 | null;
         return {
           credentialName: String(w.credentialName),
           institution: String(w.institution),
@@ -238,6 +263,9 @@ function parseWaypointResponse(content: string): RawEducationWaypoint[] {
           financialAid: Boolean(w.financialAid),
           tags: Array.isArray(w.tags) ? w.tags.map(String) : [],
           position: i + 1,
+          priority: priority ?? undefined,
+          unlocksJobPosition: w.unlocksJobPosition != null ? Number(w.unlocksJobPosition) : undefined,
+          sequenceRationale: typeof w.sequenceRationale === 'string' ? w.sequenceRationale : undefined,
         };
       });
   } catch (err) {
@@ -493,6 +521,9 @@ export async function runAgentForUser(
         url: raw.url,
         financialAid: raw.financialAid,
         tags: raw.tags,
+        priority:           raw.priority ?? null,
+        unlocksJobPosition: raw.unlocksJobPosition ?? null,
+        sequenceRationale:  raw.sequenceRationale ?? null,
       });
       savedIds.push(String(wp._id));
     }

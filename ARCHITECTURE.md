@@ -44,3 +44,33 @@ The Position 1 waypoint (nearest accepted education waypoint) is used as the pri
 - Mongoose + MongoDB (`enPathEdu` database)
 - Perplexity API (sonar-pro) for pathway generation
 - OpenAI gpt-4o-mini for structured extraction
+
+---
+
+## Geo Data Source Injection
+
+The Education Agent scopes all credential/program research to the user's intended market.
+
+### `UserProfile` Type
+
+The `UserProfile` type must include the `geoDataSource` field:
+
+```typescript
+interface UserProfile {
+  // ... existing fields ...
+  location?: string;        // "where I live" — display/context only
+  geoDataSource?: string;   // "where I want opportunities" — used to scope research
+}
+```
+
+### Priority Order for Market Scoping
+
+1. **CIA location goal** — if an active CIA goal contains a location intent, that scopes the education search.
+2. **`geoDataSource`** — the default research market when no CIA location goal is active.
+3. **`profile.location`** — fallback/display context only.
+
+### Known Issue: `educationMatch.service.ts`
+
+`educationMatch.service.ts` currently uses `profile.location` directly for market scoping. This is a known issue — the service will be updated as part of the Geo Data Source implementation to prefer `geoDataSource` over `profile.location`, using the same priority order as the Jobs Agent.
+
+> **Status:** Geo Data Source is designed, not yet built.

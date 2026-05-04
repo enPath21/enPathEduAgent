@@ -59,6 +59,14 @@ export interface EducationWaypoint {
   url?: string;
   financialAid: boolean;
   tags: string[];
+  // Sequencing intelligence
+  priority?: 1 | 2 | 3;
+  unlocksJobPosition?: number;
+  sequenceRationale?: string;
+  // User-editable dates
+  userStartDate?: string;
+  userEndDate?: string;
+  isCompleted?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -122,4 +130,7 @@ export interface RawEducationWaypoint {
   financialAid: boolean;
   tags: string[];
   position: number;
+  priority?: 1 | 2 | 3;
+  unlocksJobPosition?: number;
+  sequenceRationale?: string;
 }

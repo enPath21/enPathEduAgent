@@ -24,6 +24,17 @@ export interface IEducationWaypoint extends Document {
   url?: string;
   financialAid: boolean;
   tags: string[];
+  // Sequencing intelligence
+  /** 1 = required to unlock next career waypoint, 2 = strongly recommended, 3 = optional enhancement */
+  priority?: 1 | 2 | 3;
+  /** The job waypoint position (1–5) this credential is designed to unlock */
+  unlocksJobPosition?: number;
+  /** One sentence explaining why this credential comes before the next one */
+  sequenceRationale?: string;
+  // User-editable dates
+  userStartDate?: string;
+  userEndDate?: string;
+  isCompleted?: boolean;
 }
 
 const schema = new Schema<IEducationWaypoint>({
@@ -50,6 +61,14 @@ const schema = new Schema<IEducationWaypoint>({
   url:             { type: String },
   financialAid:    { type: Boolean, default: false },
   tags:            [{ type: String }],
+  // Sequencing intelligence
+  priority:            { type: Number, enum: [1, 2, 3], default: null },
+  unlocksJobPosition:  { type: Number, default: null },
+  sequenceRationale:   { type: String, default: null },
+  // User-editable dates
+  userStartDate: { type: String, default: null },
+  userEndDate:   { type: String, default: null },
+  isCompleted:   { type: Boolean, default: false },
 }, {
   timestamps: true,
   collection: 'education_waypoints',
