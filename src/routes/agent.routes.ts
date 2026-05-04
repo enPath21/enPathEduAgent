@@ -542,6 +542,7 @@ Respond with ONLY valid JSON (no markdown, no explanation):
     const newWp = new EducationWaypointModel({
       userId,
       waypointId: uuidv4(),
+      agentRunId: `insert-${uuidv4()}`,
       credentialName:  String(parsed.credentialName),
       institution:     String(parsed.institution || ''),
       credentialType:  String(parsed.credentialType || 'course'),
