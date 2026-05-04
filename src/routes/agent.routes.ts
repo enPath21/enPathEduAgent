@@ -392,6 +392,186 @@ Respond with ONLY valid JSON (no markdown, no explanation):
   }
 });
 
+// ── POST /api/agent/insert-waypoint ─────────────────────────────
+router.post('/insert-waypoint', requireApiKey, async (req: Request, res: Response) => {
+  const { userId, afterPosition, prevWaypoint, nextWaypoint, ciaGoals, allAcceptedWaypoints } = req.body as {
+    userId: string;
+    afterPosition: number;
+    prevWaypoint: Record<string, unknown> | null;
+    nextWaypoint: Record<string, unknown> | null;
+    ciaGoals: Array<{ goal_id?: string; goal_text?: string; category?: string; status?: string }>;
+    allAcceptedWaypoints: Array<Record<string, unknown>>;
+  };
+
+  if (!userId || afterPosition === undefined || afterPosition === null) {
+    res.status(400).json({ error: 'userId and afterPosition are required' });
+    return;
+  }
+
+  try {
+    // 1. Build context strings for the prompt
+    const prevFields = prevWaypoint
+      ? `- credentialName: ${prevWaypoint.credentialName}
+- institution: ${prevWaypoint.institution}
+- credentialType: ${prevWaypoint.credentialType}
+- projectedYear: ${prevWaypoint.projectedYear}
+- tuitionMidpoint: $${prevWaypoint.tuitionMidpoint}
+- deliveryMode: ${prevWaypoint.deliveryMode}
+- location: ${prevWaypoint.location}
+- rationale: ${prevWaypoint.rationale}`
+      : 'None — this is the first waypoint';
+
+    const nextFields = nextWaypoint
+      ? `- credentialName: ${nextWaypoint.credentialName}
+- institution: ${nextWaypoint.institution}
+- credentialType: ${nextWaypoint.credentialType}
+- projectedYear: ${nextWaypoint.projectedYear}
+- tuitionMidpoint: $${nextWaypoint.tuitionMidpoint}
+- deliveryMode: ${nextWaypoint.deliveryMode}
+- location: ${nextWaypoint.location}
+- rationale: ${nextWaypoint.rationale}`
+      : 'None — this is the last waypoint';
+
+    const pathwayText = (allAcceptedWaypoints || []).map((w: Record<string, unknown>) =>
+      `- Position ${w.position}: ${w.credentialName} at ${w.institution} (${w.projectedYear}, $${w.tuitionMidpoint})`,
+    ).join('\n') || 'No existing waypoints';
+
+    const goalsText = (ciaGoals || []).map(g => `- [${g.category}] ${g.goal_text}`).join('\n') || 'No active goals';
+
+    const prevYear = prevWaypoint ? Number(prevWaypoint.projectedYear) : new Date().getFullYear();
+    const nextYear = nextWaypoint ? Number(nextWaypoint.projectedYear) : prevYear + 2;
+
+    const prompt = `You are an Education Intelligence Agent generating ONE new education waypoint to insert into a user's education pathway.
+
+PREVIOUS EDUCATION WAYPOINT (position ${afterPosition}):
+${prevFields}
+
+NEXT EDUCATION WAYPOINT (position ${afterPosition + 1}):
+${nextFields}
+
+FULL PATHWAY CONTEXT:
+${pathwayText}
+
+CIA HARD CONSTRAINTS (active goals — must honor):
+${goalsText}
+
+YEAR CONSTRAINT: The new waypoint's projectedYear MUST be strictly between ${prevYear} and ${nextYear}. If nextWaypoint is null, use ${prevYear + 2} as a reasonable target.
+
+Generate ONE education credential that:
+- Bridges the gap logically between these two waypoints
+- Is a REAL, currently available program
+- Matches the user's evident career direction
+- Honors CIA goals as hard constraints
+- Has a projectedYear strictly between the neighbors
+
+Respond with ONLY valid JSON (no markdown, no explanation):
+{
+  "credentialName": "...",
+  "institution": "...",
+  "credentialType": "degree|certification|bootcamp|course|other",
+  "location": "City, ST or Remote",
+  "deliveryMode": "online|in-person|hybrid|flexible",
+  "projectedYear": ...,
+  "durationMonths": ...,
+  "tuitionMin": ...,
+  "tuitionMax": ...,
+  "salaryImpactPct": ...,
+  "salaryRoiPerYear": ...,
+  "rationale": "One sentence explaining why this fits this gap",
+  "confidence": 0.85,
+  "url": "https://...",
+  "financialAid": true,
+  "tags": ["tag1", "tag2"]
+}`;
+
+    // 2. Call Perplexity sonar-pro (same pattern as regenerate-one)
+    const callPerplexityFn = async (p: string) => {
+      const perplexityRes = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${ENV.PERPLEXITY_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'sonar-pro',
+          messages: [
+            { role: 'system', content: 'You are an Education Intelligence Agent. Always respond with valid JSON only — no markdown, no explanation outside the JSON.' },
+            { role: 'user', content: p },
+          ],
+          temperature: 0.2,
+          max_tokens: 1500,
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!perplexityRes.ok) {
+        const body = await perplexityRes.text();
+        throw new Error(`Perplexity error ${perplexityRes.status}: ${body}`);
+      }
+      const data = await perplexityRes.json() as {
+        choices: Array<{ message: { content: string } }>;
+      };
+      return data.choices[0]?.message?.content || '';
+    };
+
+    // 3. Call and parse — retry once on JSON parse failure
+    let parsed: Record<string, unknown> | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const content = await callPerplexityFn(
+        attempt === 0 ? prompt : prompt + '\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a single JSON object, no markdown fences, no extra text.',
+      );
+      try {
+        const cleaned = content.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+        parsed = JSON.parse(cleaned);
+        break;
+      } catch {
+        log.warn({ attempt, contentPreview: content.slice(0, 200) }, 'Failed to parse insert-waypoint response');
+        if (attempt === 1) throw new Error('Failed to parse Perplexity response after retry');
+      }
+    }
+
+    if (!parsed || !parsed.credentialName) {
+      throw new Error('Invalid waypoint from Perplexity');
+    }
+
+    // 4. Compute tuition values
+    const tuitionMin = Number(parsed.tuitionMin) || 0;
+    const tuitionMax = Number(parsed.tuitionMax) || 0;
+    const tuitionMidpoint = Math.round((Math.min(tuitionMin, tuitionMax) + Math.max(tuitionMin, tuitionMax)) / 2);
+
+    // 5. Save new waypoint to MongoDB with fractional position
+    const newWp = new EducationWaypointModel({
+      userId,
+      waypointId: uuidv4(),
+      credentialName:  String(parsed.credentialName),
+      institution:     String(parsed.institution || ''),
+      credentialType:  String(parsed.credentialType || 'course'),
+      location:        String(parsed.location || ''),
+      deliveryMode:    String(parsed.deliveryMode || 'online'),
+      projectedYear:   Number(parsed.projectedYear) || prevYear + 1,
+      durationMonths:  Number(parsed.durationMonths) || 6,
+      tuitionMin:      Math.min(tuitionMin, tuitionMax),
+      tuitionMax:      Math.max(tuitionMin, tuitionMax),
+      tuitionMidpoint,
+      salaryImpactPct: Number(parsed.salaryImpactPct) || 0,
+      salaryRoiPerYear: Number(parsed.salaryRoiPerYear) || 0,
+      rationale:       String(parsed.rationale || ''),
+      position:        afterPosition + 0.5,
+      status:          'accepted',
+      confidence:      Math.min(1, Math.max(0, Number(parsed.confidence) || 0.85)),
+      url:             typeof parsed.url === 'string' && (parsed.url as string).startsWith('http') ? String(parsed.url) : undefined,
+      financialAid:    Boolean(parsed.financialAid),
+      tags:            Array.isArray(parsed.tags) ? parsed.tags.map(String) : [],
+    });
+    await newWp.save();
+
+    log.info({ userId, afterPosition, waypointId: newWp.waypointId }, 'Insert-waypoint created');
+    res.json({ success: true, waypoint: newWp.toObject() });
+  } catch (err) {
+    log.error({ err, userId, afterPosition }, 'Failed to insert waypoint');
+    res.status(500).json({ error: 'Failed to insert waypoint' });
+  }
+});
+
 // ── POST /api/agent/waypoints/replace-with-suggestion ──────────
 router.post('/waypoints/replace-with-suggestion', requireApiKey, async (req: Request, res: Response) => {
   const { userId, waypointId, suggestion } = req.body as {
