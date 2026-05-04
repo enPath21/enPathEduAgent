@@ -44,6 +44,7 @@ export function startAgentWorker(): Worker<AgentJobData> {
     {
       connection: getRedis(),
       concurrency: 3, // Max 3 agent runs in parallel (Perplexity rate limit buffer)
+      lockDuration: 300000, // 5 min — prevents stall detection during long Perplexity calls
       limiter: {
         max: 10,
         duration: 60000, // Max 10 runs per minute across all workers

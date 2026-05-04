@@ -450,6 +450,9 @@ export async function runAgentForUser(
       }
     } else if (trigger === 'add_new') {
       // Add New — fetch already-accepted waypoints and suggest NEW/DIFFERENT ones
+      // Clean existing waypoints before fresh run (prevents duplicate accumulation)
+      await EducationWaypointModel.deleteMany({ userId });
+
       const acceptedWaypoints = await EducationWaypointModel.find({ userId, status: 'accepted' }).lean();
       const acceptedLines = acceptedWaypoints.length > 0
         ? acceptedWaypoints.map(w => `- ${w.credentialName} (${w.credentialType}, ~${w.projectedYear})`).join('\n')
@@ -479,6 +482,9 @@ export async function runAgentForUser(
         log.warn({ attempt }, 'Failed to parse add_new response — retrying');
       }
     } else {
+      // Full run — clean existing waypoints to prevent duplicate accumulation
+      await EducationWaypointModel.deleteMany({ userId });
+
       // Full run — generate 3-5 waypoints
       let content = '';
       rawWaypoints = [];
