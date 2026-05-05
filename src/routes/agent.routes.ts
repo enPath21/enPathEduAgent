@@ -557,7 +557,7 @@ Respond with ONLY valid JSON (no markdown, no explanation):
       salaryRoiPerYear: Number(parsed.salaryRoiPerYear) || 0,
       rationale:       String(parsed.rationale || ''),
       position:        afterPosition + 0.5,
-      status:          'accepted',
+      status:          'pending',
       confidence:      Math.min(1, Math.max(0, Number(parsed.confidence) || 0.85)),
       url:             typeof parsed.url === 'string' && (parsed.url as string).startsWith('http') ? String(parsed.url) : undefined,
       financialAid:    Boolean(parsed.financialAid),
