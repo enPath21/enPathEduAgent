@@ -394,13 +394,15 @@ Respond with ONLY valid JSON (no markdown, no explanation):
 
 // ── POST /api/agent/insert-waypoint ─────────────────────────────
 router.post('/insert-waypoint', requireApiKey, async (req: Request, res: Response) => {
-  const { userId, afterPosition, prevWaypoint, nextWaypoint, ciaGoals, allAcceptedWaypoints } = req.body as {
+  const { userId, afterPosition, prevWaypoint, nextWaypoint, ciaGoals, allAcceptedWaypoints, credentialTypes, userNotes } = req.body as {
     userId: string;
     afterPosition: number;
     prevWaypoint: Record<string, unknown> | null;
     nextWaypoint: Record<string, unknown> | null;
     ciaGoals: Array<{ goal_id?: string; goal_text?: string; category?: string; status?: string }>;
     allAcceptedWaypoints: Array<Record<string, unknown>>;
+    credentialTypes?: string[];
+    userNotes?: string;
   };
 
   if (!userId || afterPosition === undefined || afterPosition === null) {
@@ -441,8 +443,16 @@ router.post('/insert-waypoint', requireApiKey, async (req: Request, res: Respons
     const prevYear = prevWaypoint ? Number(prevWaypoint.projectedYear) : new Date().getFullYear();
     const nextYear = nextWaypoint ? Number(nextWaypoint.projectedYear) : prevYear + 2;
 
-    const prompt = `You are an Education Intelligence Agent generating ONE new education waypoint to insert into a user's education pathway.
+    const userGuidanceSection = (userNotes && userNotes.trim())
+      ? `\n## HIGHEST PRIORITY — User Guidance for This Step\nThe user has provided specific guidance. This OVERRIDES everything below. Treat it as a hard constraint:\n${userNotes.trim()}\n`
+      : '';
 
+    const credTypesSection = (credentialTypes && credentialTypes.length > 0)
+      ? `\n## User Credential Preferences\nThe user specifically wants one of these credential types: ${credentialTypes.join(', ')}. Prefer these types unless impossible.\n`
+      : '';
+
+    const prompt = `You are an Education Intelligence Agent generating ONE new education waypoint to insert into a user's education pathway.
+${userGuidanceSection}${credTypesSection}
 PREVIOUS EDUCATION WAYPOINT (position ${afterPosition}):
 ${prevFields}
 
