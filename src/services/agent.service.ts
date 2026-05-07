@@ -147,7 +147,7 @@ function buildEducationPathwayPrompt(
   // which credentials unlock which job positions
   const careerLines = careerWaypoints.length > 0
     ? careerWaypoints.map((w: Record<string, unknown>) =>
-        `- Position ${w.position}: ${w.jobTitle || w.title} at ${w.company || 'TBD'} (${w.projectedYear}, $${w.salaryMidpoint || 'N/A'})` +
+        `- Position ${w.position}: ${w.jobTitle || w.title} at ${w.company || 'TBD'} (start: ${w.userStartDate || w.projectedYear || 'TBD'}, end: ${w.userEndDate || 'TBD'}, $${w.salaryMidpoint || 'N/A'})` +
         (w.sequenceRationale ? ` [Why this role: ${w.sequenceRationale}]` : '')
       ).join('\n')
     : 'No career waypoints mapped yet.';
