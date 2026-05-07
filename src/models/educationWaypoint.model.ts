@@ -17,7 +17,7 @@ export interface IEducationWaypoint extends Document {
   salaryRoiPerYear: number;
   rationale: string;
   position: number;
-  status: 'pending' | 'accepted' | 'declined' | 'replaced';
+  status: 'pending' | 'accepted' | 'declined' | 'replaced' | 'undesired';
   replacedById?: string;
   agentRunId: string;
   confidence: number;
@@ -54,7 +54,7 @@ const schema = new Schema<IEducationWaypoint>({
   salaryRoiPerYear:{ type: Number, default: 0 },
   rationale:       { type: String, default: '' },
   position:        { type: Number, default: 0 },
-  status:          { type: String, enum: ['pending','accepted','declined','replaced'], default: 'pending' },
+  status:          { type: String, enum: ['pending','accepted','declined','replaced','undesired'], default: 'pending' },
   replacedById:    { type: String },
   agentRunId:      { type: String, required: true },
   confidence:      { type: Number, default: 0.8 },

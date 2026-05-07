@@ -52,6 +52,22 @@ async function fetchEducationHistory(userId: string): Promise<Array<Record<strin
   }
 }
 
+async function fetchExistingWaypoints(userId: string): Promise<{
+  active: Array<Record<string, unknown>>;
+  undesired: Array<Record<string, unknown>>;
+}> {
+  try {
+    const waypoints = await EducationWaypointModel.find({ userId }).lean();
+    const excludedStatuses = ['declined', 'replaced', 'undesired', 'deleted'];
+    const active = waypoints.filter(w => !excludedStatuses.includes(String(w.status)));
+    const undesired = waypoints.filter(w => w.status === 'undesired');
+    return { active, undesired };
+  } catch (err) {
+    log.warn({ err, userId }, 'Failed to fetch existing waypoints');
+    return { active: [], undesired: [] };
+  }
+}
+
 async function fetchCurrentSalary(userId: string): Promise<number> {
   try {
     const res = await fetch(
@@ -157,6 +173,8 @@ function buildEducationPathwayPrompt(
   careerWaypoints: Array<Record<string, unknown>>,
   ciaContext: CIAContext,
   userCurrentSalary: number = 0,
+  activeWaypoints: Array<Record<string, unknown>> = [],
+  undesiredWaypoints: Array<Record<string, unknown>> = [],
 ): string {
   const eduLines = educationHistory.length > 0
     ? educationHistory.map(e =>
@@ -180,6 +198,22 @@ function buildEducationPathwayPrompt(
         .join('\n') || 'No active education goals.'
     : 'No education goals recorded.';
 
+  // Item 3 — exclusion lists
+  const activeWpLines = activeWaypoints.length > 0
+    ? activeWaypoints.map(w => `- ${w.credentialName}`).join('\n')
+    : 'None.';
+
+  const undesiredWpLines = undesiredWaypoints.length > 0
+    ? undesiredWaypoints.map(w =>
+        `- ${w.credentialName} (type: ${w.credentialType || 'unknown'}, tuition: $${w.tuitionMin || 0}–$${w.tuitionMax || 0}, delivery: ${w.deliveryMode || 'unknown'})`
+      ).join('\n')
+    : 'None.';
+
+  // Item 5 — unlocksJobPosition rule
+  const unlocksRule = careerWaypoints.length > 0
+    ? 'unlocksJobPosition is REQUIRED — every credential MUST have unlocksJobPosition set to a waypoint position number (1, 2, 3, etc.). Match the credential to the waypoint it most directly helps unlock. unlocksJobPosition may NOT be null.'
+    : 'unlocksJobPosition: use null (no career waypoints mapped yet).';
+
   return `You are an Education Intelligence Agent. Analyze this user's background and generate a personalized, intelligently-sequenced education pathway.
 
 CURRENT EDUCATION HISTORY:
@@ -193,6 +227,17 @@ ${careerLines}
 CIA EDUCATION GOALS:
 ${goalsLines}
 
+ALREADY IN PATHWAY (do not suggest these exact credentials):
+${activeWpLines}
+
+USER REJECTION PATTERNS (credentials user marked as not a good fit):
+${undesiredWpLines}
+
+DOMAIN CONSTRAINT:
+All credentials MUST be directly relevant to the user's career pathway roles listed above.
+Do NOT suggest credentials from unrelated fields (e.g. software engineering, coding bootcamps, data science) unless the user's career waypoints explicitly require those skills.
+The user's career domain is determined by their job titles and waypoint titles — stay within that domain.
+
 ## Your Task — Two-Phase Reasoning
 
 PHASE 1 — Credential Type Decision (reason through this before picking credentials):
@@ -202,12 +247,17 @@ For each career waypoint above, determine:
 3. Is there a credential that must be completed BEFORE another one (prerequisite ordering)?
 
 For example:
-- If Position 1 requires a PMP or supply chain cert to stand out, that’s priority=1 and unlocksJobPosition=1
+- If Position 1 requires a PMP or supply chain cert to stand out, that's priority=1 and unlocksJobPosition=1
 - If a degree is needed only for Position 3+, schedule it to complete before Position 3's projectedYear
 - Certs and short courses can often be done in parallel; degrees cannot
 
 PHASE 2 — Generate 3-5 education waypoints based on Phase 1 reasoning.
 Each waypoint is a credential ARCHETYPE — the TYPE of credential, not a specific program.
+
+EXCLUSION RULES:
+- Never suggest a credential already in the ALREADY IN PATHWAY list above.
+- Analyze the USER REJECTION PATTERNS list for patterns (e.g. high tuition, online-only, wrong domain) and avoid repeating those patterns.
+- If the rejection pattern is unclear, default to staying strictly within the user's career domain.
 
 Return ONLY valid JSON array:
 [{
@@ -221,7 +271,8 @@ Return ONLY valid JSON array:
   "tuitionMin": 1500,
   "tuitionMax": 2500,
   "salaryImpactPct": 15,
-  "salaryRoiPerYear": 8000,
+  "attributionPct": 0.30,
+  "salaryRoiPerYear": 0,
   "priority": 1,
   "unlocksJobPosition": 1,
   "sequenceRationale": "The CSCP is listed as preferred or required in 62% of Senior Supply Chain Manager job postings; completing it before applying for Position 1 (2028) increases interview conversion by ~2x.",
@@ -239,11 +290,11 @@ FIELD RULES:
 - credentialType: one of: degree, certification, bootcamp, course, other
 - deliveryMode: one of: online, in-person, hybrid, flexible
 - priority: 1 = required to unlock next career waypoint, 2 = strongly recommended, 3 = optional enhancement
-- unlocksJobPosition: the career waypoint position number (1–5) this credential is most critical for unlocking. Use null if supplemental.
+- ${unlocksRule}
 - sequenceRationale: One sentence only. State concisely why this credential comes at this point in the career path.
 - rationale: Always return an empty string "". Do not generate any rationale text.
 - salaryImpactPct: estimated % salary increase from this credential based on real BLS/industry data for this field
-- attributionPct: decimal 0.0–1.0 — what fraction of the salary gap between user's current salary and the target waypoint salary is attributable to this credential. Use these ranges by credential type: degree=0.50–0.70, certification=0.20–0.40, bootcamp=0.25–0.45, course=0.05–0.15. Base this on how critical the credential is for that specific role.
+- attributionPct: REQUIRED — decimal 0.0–1.0. This is the fraction of the salary gap between the user's current salary and the target waypoint salary that is attributable to this credential. NEVER omit this field. NEVER return 0 unless the credential has truly zero salary impact. Use these ranges STRICTLY by credential type: degree=0.50–0.70, certification=0.20–0.40, bootcamp=0.25–0.45, course=0.05–0.15. This is the primary driver of salaryRoiPerYear — take it seriously.
 - salaryRoiPerYear: set to 0 — this will be computed in code from attributionPct
 - tuitionMin/tuitionMax: typical market costs for this credential type
 - projectedYear ordering: space out years to account for durationMonths. No overlap unless certs are truly self-paced and can run parallel.
@@ -291,8 +342,19 @@ function parseWaypointResponse(
             const waypointSalaryMid = Number(targetWp?.salaryMidpoint || targetWp?.salaryMid || 0);
             const delta = waypointSalaryMid - userCurrentSalary;
             if (delta <= 0 || !targetWp) return Number(w.salaryRoiPerYear) || 0;
-            const attributionPct = Math.min(1, Math.max(0, Number(w.attributionPct) || 0));
-            return attributionPct > 0 ? Math.round(delta * attributionPct) : (Number(w.salaryRoiPerYear) || 0);
+            let attributionPct = Math.min(1, Math.max(0, Number(w.attributionPct) || 0));
+            // Default attributionPct by credential type when LLM returns 0 or missing
+            if (attributionPct === 0) {
+              const credType = String(w.credentialType || 'unknown').toLowerCase();
+              const defaults: Record<string, number> = {
+                degree: 0.60,
+                certification: 0.30,
+                bootcamp: 0.35,
+                course: 0.10,
+              };
+              attributionPct = defaults[credType] ?? 0.20;
+            }
+            return Math.round(delta * attributionPct);
           })(),
           rationale: String(w.rationale || ''),
           confidence: Math.min(1, Math.max(0, Number(w.confidence) || 0.7)),
@@ -437,12 +499,13 @@ export async function runAgentForUser(
   log.info({ runId, userId, trigger }, 'Agent run started');
 
   try {
-    // 1. Fetch education history, career waypoints, CIA context, and current salary in parallel
-    const [educationHistory, careerWaypoints, ciaContext, userCurrentSalary] = await Promise.all([
+    // 1. Fetch education history, career waypoints, CIA context, current salary, and existing waypoints in parallel
+    const [educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints] = await Promise.all([
       fetchEducationHistory(userId),
       fetchCareerWaypoints(userId),
       fetchCIAContext(userId),
       fetchCurrentSalary(userId),
+      fetchExistingWaypoints(userId),
     ]);
 
     // Update run inputs
@@ -465,7 +528,7 @@ export async function runAgentForUser(
       if (!rejected) {
         rawWaypoints = [];
       } else {
-        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext) +
+        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired) +
           `\n\nIMPORTANT: The user rejected "${rejected.credentialName}". ` +
           `Generate exactly 1 replacement credential for position ${rejected.position} that is meaningfully different. ` +
           `The replacement MUST use projectedYear = ${rejected.projectedYear} (do NOT change the year — the user assigned this slot). ` +
@@ -495,7 +558,7 @@ export async function runAgentForUser(
         ? acceptedWaypoints.map(w => `- ${w.credentialName} (${w.credentialType}, ~${w.projectedYear})`).join('\n')
         : 'None yet.';
 
-      const basePrompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext);
+      const basePrompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired);
       const addNewPrompt = basePrompt +
         `\n\nUSER'S ALREADY ACCEPTED CREDENTIALS:\n${acceptedLines}\n\n` +
         `IMPORTANT: The user wants NEW education ideas. Do NOT suggest anything similar to the already-accepted credentials above. ` +
@@ -526,7 +589,7 @@ export async function runAgentForUser(
       let content = '';
       rawWaypoints = [];
       for (let attempt = 0; attempt < 2; attempt++) {
-        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary);
+        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired);
         content = await callPerplexity(
           attempt === 0 ? prompt : prompt + '\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a valid JSON array.',
         );
