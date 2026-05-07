@@ -52,6 +52,26 @@ async function fetchEducationHistory(userId: string): Promise<Array<Record<strin
   }
 }
 
+async function fetchCurrentSalary(userId: string): Promise<number> {
+  try {
+    const res = await fetch(
+      `${ENV.JOBS_BACKEND_URL}/api/jobs/user/${userId}`,
+      {
+        headers: { 'x-api-key': ENV.INTERNAL_API_KEY },
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+    if (!res.ok) throw new Error(`Jobs backend returned ${res.status}`);
+    const data = await res.json() as Array<Record<string, unknown>>;
+    const jobs = Array.isArray(data) ? data : [data];
+    const currentJob = jobs.find(j => !j.endDate) || jobs[0];
+    return Number(currentJob?.endingSalary || currentJob?.startingSalary || 0);
+  } catch (err) {
+    log.warn({ err, userId }, 'Current salary fetch failed — defaulting to 0');
+    return 0;
+  }
+}
+
 async function fetchCareerWaypoints(userId: string): Promise<Array<Record<string, unknown>>> {
   try {
     const res = await fetch(
@@ -136,6 +156,7 @@ function buildEducationPathwayPrompt(
   educationHistory: Array<Record<string, unknown>>,
   careerWaypoints: Array<Record<string, unknown>>,
   ciaContext: CIAContext,
+  userCurrentSalary: number = 0,
 ): string {
   const eduLines = educationHistory.length > 0
     ? educationHistory.map(e =>
@@ -163,6 +184,8 @@ function buildEducationPathwayPrompt(
 
 CURRENT EDUCATION HISTORY:
 ${eduLines}
+
+USER CURRENT SALARY: $${userCurrentSalary.toLocaleString()} per year
 
 CAREER PATHWAY (job waypoints — what roles they're targeting):
 ${careerLines}
@@ -220,7 +243,8 @@ FIELD RULES:
 - sequenceRationale: One sentence only. State concisely why this credential comes at this point in the career path.
 - rationale: Always return an empty string "". Do not generate any rationale text.
 - salaryImpactPct: estimated % salary increase from this credential based on real BLS/industry data for this field
-- salaryRoiPerYear: estimated annual earnings increase for professionals with vs. without this credential in this specific field
+- attributionPct: decimal 0.0–1.0 — what fraction of the salary gap between user's current salary and the target waypoint salary is attributable to this credential. Use these ranges by credential type: degree=0.50–0.70, certification=0.20–0.40, bootcamp=0.25–0.45, course=0.05–0.15. Base this on how critical the credential is for that specific role.
+- salaryRoiPerYear: set to 0 — this will be computed in code from attributionPct
 - tuitionMin/tuitionMax: typical market costs for this credential type
 - projectedYear ordering: space out years to account for durationMonths. No overlap unless certs are truly self-paced and can run parallel.
 - Logical prerequisite ordering: never place an advanced degree before the foundational cert that gates entry to the field
@@ -229,7 +253,11 @@ FIELD RULES:
 
 // ── Parse Perplexity response ───────────────────────────────────
 
-function parseWaypointResponse(content: string): RawEducationWaypoint[] {
+function parseWaypointResponse(
+  content: string,
+  careerWaypoints: Array<Record<string, unknown>> = [],
+  userCurrentSalary: number = 0,
+): RawEducationWaypoint[] {
   try {
     const cleaned = content.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
     const parsed = JSON.parse(cleaned);
@@ -257,7 +285,15 @@ function parseWaypointResponse(content: string): RawEducationWaypoint[] {
           tuitionMin: Math.min(tuitionMin, tuitionMax),
           tuitionMax: Math.max(tuitionMin, tuitionMax),
           salaryImpactPct: Number(w.salaryImpactPct) || 0,
-          salaryRoiPerYear: Number(w.salaryRoiPerYear) || 0,
+          salaryRoiPerYear: (() => {
+            const targetWp = careerWaypoints.find(cw => Number(cw.position) === Number(w.unlocksJobPosition))
+              || careerWaypoints[0];
+            const waypointSalaryMid = Number(targetWp?.salaryMidpoint || targetWp?.salaryMid || 0);
+            const delta = waypointSalaryMid - userCurrentSalary;
+            if (delta <= 0 || !targetWp) return Number(w.salaryRoiPerYear) || 0;
+            const attributionPct = Math.min(1, Math.max(0, Number(w.attributionPct) || 0));
+            return attributionPct > 0 ? Math.round(delta * attributionPct) : (Number(w.salaryRoiPerYear) || 0);
+          })(),
           rationale: String(w.rationale || ''),
           confidence: Math.min(1, Math.max(0, Number(w.confidence) || 0.7)),
           url: typeof w.url === 'string' && w.url.startsWith('http') ? w.url : undefined,
@@ -401,11 +437,12 @@ export async function runAgentForUser(
   log.info({ runId, userId, trigger }, 'Agent run started');
 
   try {
-    // 1. Fetch education history, career waypoints, and CIA context in parallel
-    const [educationHistory, careerWaypoints, ciaContext] = await Promise.all([
+    // 1. Fetch education history, career waypoints, CIA context, and current salary in parallel
+    const [educationHistory, careerWaypoints, ciaContext, userCurrentSalary] = await Promise.all([
       fetchEducationHistory(userId),
       fetchCareerWaypoints(userId),
       fetchCIAContext(userId),
+      fetchCurrentSalary(userId),
     ]);
 
     // Update run inputs
@@ -477,7 +514,7 @@ export async function runAgentForUser(
         const content = await callPerplexity(
           attempt === 0 ? addNewPrompt : addNewPrompt + '\n\nCRITICAL: Return EXACTLY 3 waypoint objects in your JSON array. Not 1, not 2 — exactly 3.\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a valid JSON array.',
         );
-        rawWaypoints = parseWaypointResponse(content);
+        rawWaypoints = parseWaypointResponse(content, careerWaypoints, userCurrentSalary);
         if (rawWaypoints.length > 0) break;
         log.warn({ attempt }, 'Failed to parse add_new response — retrying');
       }
@@ -489,11 +526,11 @@ export async function runAgentForUser(
       let content = '';
       rawWaypoints = [];
       for (let attempt = 0; attempt < 2; attempt++) {
-        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext);
+        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary);
         content = await callPerplexity(
           attempt === 0 ? prompt : prompt + '\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a valid JSON array.',
         );
-        rawWaypoints = parseWaypointResponse(content);
+        rawWaypoints = parseWaypointResponse(content, careerWaypoints, userCurrentSalary);
         if (rawWaypoints.length > 0) break;
         log.warn({ attempt, contentPreview: content.slice(0, 200) }, 'Failed to parse pathway response — retrying');
       }
