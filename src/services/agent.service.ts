@@ -341,7 +341,7 @@ function parseWaypointResponse(
               || careerWaypoints[0];
             const waypointSalaryMid = Number(targetWp?.salaryMidpoint || targetWp?.salaryMid || 0);
             const delta = waypointSalaryMid - userCurrentSalary;
-            if (delta <= 0 || !targetWp) return Number(w.salaryRoiPerYear) || 0;
+            if (delta <= 0 || !targetWp) return 0;
             let attributionPct = Math.min(1, Math.max(0, Number(w.attributionPct) || 0));
             // Default attributionPct by credential type when LLM returns 0 or missing
             if (attributionPct === 0) {
@@ -524,7 +524,7 @@ export async function runAgentForUser(
 
     if (replacingWaypointId) {
       // Single replacement — find rejected waypoint and generate alternative
-      const rejected = await EducationWaypointModel.findById(replacingWaypointId);
+      const rejected = await EducationWaypointModel.findOne({ $or: [{ waypointId: replacingWaypointId }, { _id: replacingWaypointId }] }).catch(() => EducationWaypointModel.findOne({ waypointId: replacingWaypointId }));
       if (!rejected) {
         rawWaypoints = [];
       } else {
@@ -657,9 +657,10 @@ export async function runAgentForUser(
 
     // 4. Mark replaced waypoint if this is a replacement run
     if (replacingWaypointId && savedIds.length > 0) {
-      await EducationWaypointModel.findByIdAndUpdate(replacingWaypointId, {
-        $set: { status: 'replaced', replacedById: savedIds[0] },
-      });
+      await EducationWaypointModel.findOneAndUpdate(
+        { $or: [{ waypointId: replacingWaypointId }, { _id: replacingWaypointId }] },
+        { $set: { status: 'replaced', replacedById: savedIds[0] } },
+      ).catch(() => EducationWaypointModel.findOneAndUpdate({ waypointId: replacingWaypointId }, { $set: { status: 'replaced', replacedById: savedIds[0] } }));
     }
 
     // 5. Complete the run record
@@ -679,7 +680,7 @@ export async function runAgentForUser(
     // 7. Audit events (fire-and-forget)
     if (savedIds.length > 0) {
       if (replacingWaypointId) {
-        const rejected = await EducationWaypointModel.findById(replacingWaypointId).lean();
+        const rejected = await EducationWaypointModel.findOne({ $or: [{ waypointId: replacingWaypointId }, { _id: replacingWaypointId }] }).lean().catch(() => EducationWaypointModel.findOne({ waypointId: replacingWaypointId }).lean());
         const newWp = rawWaypoints[0];
         postAuditEvent({
           userId,
