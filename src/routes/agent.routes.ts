@@ -18,6 +18,7 @@ import { EducationWaypointModel } from '../models/educationWaypoint.model';
 import { AgentRunModel } from '../models/agentRun.model';
 import { ENV } from '../config/env';
 import { createLogger } from '../config/logger';
+import { recalcEduProjections } from '../services/agent.service';
 import { findEducationMatches } from '../services/educationMatch.service';
 import { postAuditEvent } from '../services/agent.service';
 import type { UserProfile, CIAContext } from '../types';
@@ -39,6 +40,20 @@ function requireApiKey(req: Request, res: Response, next: () => void) {
 function getAgentQueue(): Queue {
   return new Queue('edu-agent', { connection: getRedis() });
 }
+
+// ── POST /api/agent/recalc/:userId ─────────────────────────────
+// Recomputes salaryRoiPerYear on accepted waypoints. Never touches pathway items.
+router.post('/recalc/:userId', requireApiKey, async (req: Request, res: Response) => {
+  const { userId } = req.params;
+  try {
+    await recalcEduProjections(userId);
+    log.info({ userId }, 'EIA recalc completed');
+    res.json({ recalculated: true, userId });
+  } catch (err) {
+    log.error({ err, userId }, 'EIA recalc failed');
+    res.status(500).json({ error: 'Recalc failed' });
+  }
+});
 
 // ── POST /api/agent/run/:userId ──────────────────────────────────
 router.post('/run/:userId', requireApiKey, async (req: Request, res: Response) => {

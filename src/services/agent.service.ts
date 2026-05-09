@@ -375,6 +375,30 @@ function parseWaypointResponse(
 
 // ── Audit event helper ──────────────────────────────────────────
 
+
+// ── Recalc ──────────────────────────────────────────────────────
+// Recomputes salaryRoiPerYear on all accepted waypoints using fresh salary data.
+// Never creates, deletes, or modifies pathway statuses.
+export async function recalcEduProjections(userId: string): Promise<void> {
+  const [currentSalary, careerWaypoints, acceptedWaypoints] = await Promise.all([
+    fetchCurrentSalary(userId),
+    fetchCareerWaypoints(userId),
+    EducationWaypointModel.find({ userId, status: 'accepted' }).lean(),
+  ]);
+
+  for (const wp of acceptedWaypoints) {
+    const targetWp = careerWaypoints.find((cw: Record<string, unknown>) => Number(cw.position) === Number(wp.unlocksJobPosition)) || careerWaypoints[0];
+    const waypointSalaryMid = Number((targetWp as Record<string, unknown>)?.salaryMidpoint || (targetWp as Record<string, unknown>)?.salaryMid || 0);
+    const delta = waypointSalaryMid - currentSalary;
+    if (delta <= 0 || !targetWp) continue;
+    const credType = String(wp.credentialType || 'unknown').toLowerCase();
+    const defaults: Record<string, number> = { degree: 0.60, certification: 0.30, bootcamp: 0.35, course: 0.10 };
+    const attributionPct = defaults[credType] ?? 0.20;
+    const salaryRoiPerYear = Math.round(delta * attributionPct);
+    await EducationWaypointModel.findByIdAndUpdate(wp._id, { $set: { salaryRoiPerYear } });
+  }
+}
+
 export async function postAuditEvent(payload: {
   userId: string;
   type: string;

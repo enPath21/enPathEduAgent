@@ -12,6 +12,7 @@
 import { Worker, Job } from 'bullmq';
 import { getRedis } from '../config/redis';
 import { runAgentForUser } from '../services/agent.service';
+import { checkBalance, reportUsage } from '../services/billing.client';
 import { createLogger } from '../config/logger';
 
 const log = createLogger('agent-worker');
@@ -32,9 +33,28 @@ export function startAgentWorker(): Worker<AgentJobData> {
 
       log.info({ jobId: job.id, userId, trigger }, 'Processing agent job');
 
+      // Billing pre-check
+      const balance = await checkBalance(userId);
+      if (!balance.allowed) {
+        log.warn({ jobId: job.id, userId, reason: balance.reason }, 'Insufficient balance — skipping agent run');
+        return { error: 'INSUFFICIENT_BALANCE', runId: '', waypointCount: 0 };
+      }
+
       try {
         const result = await runAgentForUser(userId, trigger, replacingWaypointId, credentialTypes, lastAcceptedYear);
         log.info({ jobId: job.id, ...result }, 'Agent job completed');
+
+        // Billing post-deduct (EIA uses 1 Perplexity call for all waypoints)
+        await reportUsage({
+          userId,
+          agentId: 'EIA',
+          trigger,
+          runId: result.runId,
+          model: 'sonar-pro',
+          inputTokens: 2000,
+          outputTokens: 2000,
+        });
+
         return result;
       } catch (err) {
         log.error({ err, jobId: job.id, userId }, 'Agent job failed');
