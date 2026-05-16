@@ -68,7 +68,7 @@ async function fetchExistingWaypoints(userId: string): Promise<{
   }
 }
 
-async function fetchCurrentSalary(userId: string): Promise<number> {
+async function fetchJobsData(userId: string): Promise<{ salary: number; geoDataSource: string | undefined }> {
   try {
     const res = await fetch(
       `${ENV.JOBS_BACKEND_URL}/api/jobs/user/${userId}`,
@@ -81,11 +81,18 @@ async function fetchCurrentSalary(userId: string): Promise<number> {
     const data = await res.json() as Array<Record<string, unknown>>;
     const jobs = Array.isArray(data) ? data : [data];
     const currentJob = jobs.find(j => !j.endDate) || jobs[0];
-    return Number(currentJob?.endingSalary || currentJob?.startingSalary || 0);
+    return {
+      salary: Number(currentJob?.endingSalary || currentJob?.startingSalary || 0),
+      geoDataSource: currentJob?.geoDataSource as string || undefined,
+    };
   } catch (err) {
-    log.warn({ err, userId }, 'Current salary fetch failed — defaulting to 0');
-    return 0;
+    log.warn({ err, userId }, 'Jobs data fetch failed — defaulting to 0/undefined');
+    return { salary: 0, geoDataSource: undefined };
   }
+}
+
+async function fetchCurrentSalary(userId: string): Promise<number> {
+  return (await fetchJobsData(userId)).salary;
 }
 
 async function fetchCareerWaypoints(userId: string): Promise<Array<Record<string, unknown>>> {
@@ -175,7 +182,9 @@ function buildEducationPathwayPrompt(
   userCurrentSalary: number = 0,
   activeWaypoints: Array<Record<string, unknown>> = [],
   undesiredWaypoints: Array<Record<string, unknown>> = [],
+  geoDataSource?: string,
 ): string {
+  const market = geoDataSource || 'United States';
   const eduLines = educationHistory.length > 0
     ? educationHistory.map(e =>
         `- ${e.degree || e.credentialName || 'Unknown'} (${e.fieldOfStudy || 'General'}, ${e.yearCompleted || e.graduationYear || 'N/A'})`
@@ -215,6 +224,9 @@ function buildEducationPathwayPrompt(
     : 'unlocksJobPosition: use null (no career waypoints mapped yet).';
 
   return `You are an Education Intelligence Agent. Analyze this user's background and generate a personalized, intelligently-sequenced education pathway.
+
+## HARD CONSTRAINT — Research Market: ${market}
+All credential recommendations, tuition ranges, provider availability, and market context MUST be relevant to the ${market} market. Do not use credentials or pricing from other countries. CIA goals and user notes may narrow by city or region within ${market} only.
 
 CURRENT EDUCATION HISTORY:
 ${eduLines}
@@ -524,13 +536,15 @@ export async function runAgentForUser(
 
   try {
     // 1. Fetch education history, career waypoints, CIA context, current salary, and existing waypoints in parallel
-    const [educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints] = await Promise.all([
+    const [educationHistory, careerWaypoints, ciaContext, jobsData, existingWaypoints] = await Promise.all([
       fetchEducationHistory(userId),
       fetchCareerWaypoints(userId),
       fetchCIAContext(userId),
-      fetchCurrentSalary(userId),
+      fetchJobsData(userId),
       fetchExistingWaypoints(userId),
     ]);
+    const userCurrentSalary = jobsData.salary;
+    const geoDataSource = jobsData.geoDataSource;
 
     // Update run inputs
     const latestEdu = educationHistory[0];
@@ -552,7 +566,7 @@ export async function runAgentForUser(
       if (!rejected) {
         rawWaypoints = [];
       } else {
-        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired) +
+        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired, geoDataSource) +
           `\n\nIMPORTANT: The user rejected "${rejected.credentialName}". ` +
           `Generate exactly 1 replacement credential for position ${rejected.position} that is meaningfully different. ` +
           `The replacement MUST use projectedYear = ${rejected.projectedYear} (do NOT change the year — the user assigned this slot). ` +
@@ -582,7 +596,7 @@ export async function runAgentForUser(
         ? acceptedWaypoints.map(w => `- ${w.credentialName} (${w.credentialType}, ~${w.projectedYear})`).join('\n')
         : 'None yet.';
 
-      const basePrompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired);
+      const basePrompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired, geoDataSource);
       const addNewPrompt = basePrompt +
         `\n\nUSER'S ALREADY ACCEPTED CREDENTIALS:\n${acceptedLines}\n\n` +
         `IMPORTANT: The user wants NEW education ideas. Do NOT suggest anything similar to the already-accepted credentials above. ` +
@@ -613,7 +627,7 @@ export async function runAgentForUser(
       let content = '';
       rawWaypoints = [];
       for (let attempt = 0; attempt < 2; attempt++) {
-        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired);
+        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired, geoDataSource);
         content = await callPerplexity(
           attempt === 0 ? prompt : prompt + '\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a valid JSON array.',
         );
