@@ -129,6 +129,7 @@ export interface RawEducationWaypoint {
   url?: string;
   financialAid: boolean;
   tags: string[];
+  partnerSites?: string[];
   position: number;
   priority?: 1 | 2 | 3;
   unlocksJobPosition?: number;

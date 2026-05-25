@@ -24,6 +24,7 @@ export interface IEducationWaypoint extends Document {
   url?: string;
   financialAid: boolean;
   tags: string[];
+  partnerSites?: string[];
   // Sequencing intelligence
   /** 1 = required to unlock next career waypoint, 2 = strongly recommended, 3 = optional enhancement */
   priority?: 1 | 2 | 3;
@@ -61,6 +62,7 @@ const schema = new Schema<IEducationWaypoint>({
   url:             { type: String },
   financialAid:    { type: Boolean, default: false },
   tags:            [{ type: String }],
+  partnerSites:    [{ type: String }],
   // Sequencing intelligence
   priority:            { type: Number, enum: [1, 2, 3], default: null },
   unlocksJobPosition:  { type: Number, default: null },

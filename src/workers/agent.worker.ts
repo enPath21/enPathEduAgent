@@ -44,15 +44,15 @@ export function startAgentWorker(): Worker<AgentJobData> {
         const result = await runAgentForUser(userId, trigger, replacingWaypointId, credentialTypes, lastAcceptedYear);
         log.info({ jobId: job.id, ...result }, 'Agent job completed');
 
-        // Billing post-deduct (EIA uses 1 Perplexity call for all waypoints)
+        // Billing post-deduct — real token counts from agent run
         await reportUsage({
           userId,
           agentId: 'EIA',
           trigger,
           runId: result.runId,
-          model: 'sonar-pro',
-          inputTokens: 2000,
-          outputTokens: 2000,
+          model: 'sonar',
+          inputTokens: result.inputTokens ?? 0,
+          outputTokens: result.outputTokens ?? 0,
         });
 
         return result;

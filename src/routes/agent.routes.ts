@@ -162,6 +162,11 @@ router.patch('/waypoints/:id/feedback', requireApiKey, async (req: Request, res:
       await waypoint.save();
       log.info({ id, userId }, 'Waypoint accepted');
       res.json({ success: true, status: 'accepted' });
+      // Recompute salaryRoiPerYear on all accepted waypoints in the background—
+      // fire-and-forget so the accept response is not delayed.
+      recalcEduProjections(userId).catch(err =>
+        log.error({ err, userId }, 'Post-accept recalc failed')
+      );
       return;
     }
 
@@ -319,9 +324,10 @@ Respond with ONLY valid JSON (no markdown, no explanation):
   "salaryRoiPerYear": ...,
   "rationale": "One sentence explaining why this is a better fit based on the feedback",
   "confidence": 0.85,
-  "url": "https://...",
+  "url": "",
   "financialAid": true,
-  "tags": ["tag1", "tag2"]
+  "tags": ["tag1", "tag2"],
+  "partnerSites": ["Platform1", "Platform2", "Platform3"]
 }`;
 
     const callPerplexityFn = async (p: string) => {
@@ -332,9 +338,15 @@ Respond with ONLY valid JSON (no markdown, no explanation):
           Authorization: `Bearer ${ENV.PERPLEXITY_API_KEY}`,
         },
         body: JSON.stringify({
-          model: 'sonar-pro',
+          model: 'sonar',
           messages: [
-            { role: 'system', content: 'You are an Education Intelligence Agent. Always respond with valid JSON only — no markdown, no explanation outside the JSON.' },
+            {
+              role: 'system',
+              content:
+                'You are an Education Intelligence Agent. You synthesize education pathway archetypes — ' +
+                'generic credential types, NOT specific programs at specific institutions. ' +
+                'Always respond with valid JSON only — no markdown, no explanation outside the JSON.',
+            },
             { role: 'user', content: p },
           ],
           temperature: 0.2,
@@ -390,9 +402,10 @@ Respond with ONLY valid JSON (no markdown, no explanation):
       salaryRoiPerYear: Number(parsed.salaryRoiPerYear) || 0,
       rationale: String(parsed.rationale || ''),
       confidence: Math.min(1, Math.max(0, Number(parsed.confidence) || 0.7)),
-      url: typeof parsed.url === 'string' && (parsed.url as string).startsWith('http') ? String(parsed.url) : undefined,
+      url: undefined,
       financialAid: Boolean(parsed.financialAid),
       tags: Array.isArray(parsed.tags) ? parsed.tags.map(String) : [],
+      partnerSites: Array.isArray(parsed.partnerSites) ? parsed.partnerSites.map(String) : [],
       position: wp.position,
     };
 
@@ -408,6 +421,26 @@ Respond with ONLY valid JSON (no markdown, no explanation):
 });
 
 // ── POST /api/agent/insert-waypoint ─────────────────────────────
+async function fetchUserJobContext(userId: string, internalApiKey: string, jobsBackendUrl: string): Promise<{ geoDataSource: string; currentJobTitle: string; currentSalary: number }> {
+  try {
+    const res = await fetch(`${jobsBackendUrl}/api/jobs/user/${userId}`, {
+      headers: { 'x-api-key': internalApiKey },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) throw new Error(`Jobs backend ${res.status}`);
+    const data = await res.json() as Array<Record<string, unknown>>;
+    const jobs = Array.isArray(data) ? data : [data];
+    const currentJob = jobs.find((j: Record<string, unknown>) => !j.endDate) || jobs[0];
+    return {
+      geoDataSource: (currentJob?.geoDataSource as string) || 'United States',
+      currentJobTitle: (currentJob?.jobTitle as string) || '',
+      currentSalary: Number(currentJob?.endingSalary || currentJob?.startingSalary || 0),
+    };
+  } catch {
+    return { geoDataSource: 'United States', currentJobTitle: '', currentSalary: 0 };
+  }
+}
+
 router.post('/insert-waypoint', requireApiKey, async (req: Request, res: Response) => {
   const { userId, afterPosition, prevWaypoint, nextWaypoint, ciaGoals, allAcceptedWaypoints, credentialTypes, userNotes } = req.body as {
     userId: string;
@@ -426,7 +459,41 @@ router.post('/insert-waypoint', requireApiKey, async (req: Request, res: Respons
   }
 
   try {
-    // 1. Build context strings for the prompt
+    // 1. Fetch user's job context (market, career track) + career waypoints for ROI calc
+    const [jobContext, careerWaypointsRes] = await Promise.all([
+      fetchUserJobContext(userId, ENV.INTERNAL_API_KEY, ENV.JOBS_BACKEND_URL),
+      fetch(`${ENV.JOBS_BACKEND_URL}/api/jobs/waypoints/${userId}`, {
+        headers: { 'x-api-key': ENV.INTERNAL_API_KEY },
+        signal: AbortSignal.timeout(5000),
+      }).then(r => r.ok ? r.json() as Promise<{ waypoints?: Array<Record<string, unknown>> }> : { waypoints: [] }).catch(() => ({ waypoints: [] as Array<Record<string, unknown>> })),
+    ]);
+    const market = jobContext.geoDataSource;
+    const currentJobTitle = jobContext.currentJobTitle;
+    const careerWaypoints: Array<Record<string, unknown>> = (careerWaypointsRes as { waypoints?: Array<Record<string, unknown>> }).waypoints || [];
+
+    // Helper: compute salaryRoiPerYear same way parseWaypointResponse does
+    const computeRoi = (credentialType: string, attributionPct: number, unlocksPos: number | null, salaryImpactPct?: number): number => {
+      const userSalary = Number(jobContext.currentSalary || 0);
+      let pct = Math.min(1, Math.max(0, attributionPct));
+      if (pct === 0) {
+        const defaults: Record<string, number> = { degree: 0.60, certification: 0.30, bootcamp: 0.35, course: 0.10 };
+        pct = defaults[credentialType.toLowerCase()] ?? 0.20;
+      }
+      const targetWp = unlocksPos != null
+        ? careerWaypoints.find(w => Number(w.position) === unlocksPos) || careerWaypoints[0]
+        : careerWaypoints[0];
+      const waypointSalaryMid = Number((targetWp as Record<string, unknown>)?.salaryMidpoint || 0);
+      const delta = waypointSalaryMid - userSalary;
+      if (targetWp && delta > 0) {
+        // Primary: career waypoint target salary minus current salary
+        return Math.round(delta * pct);
+      }
+      // Fallback: no career waypoints — use current salary × salaryImpactPct × attributionPct
+      const impactFraction = Math.min(1, Math.max(0, Number(salaryImpactPct) || 0)) / 100;
+      return userSalary > 0 ? Math.round(userSalary * impactFraction * pct) : 0;
+    };
+
+    // 2. Build context strings for the prompt
     const prevFields = prevWaypoint
       ? `- credentialName: ${prevWaypoint.credentialName}
 - institution: ${prevWaypoint.institution}
@@ -466,8 +533,18 @@ router.post('/insert-waypoint', requireApiKey, async (req: Request, res: Respons
       ? `\n## User Credential Preferences\nThe user specifically wants one of these credential types: ${credentialTypes.join(', ')}. Prefer these types unless impossible.\n`
       : '';
 
+    const careerTrackSection = currentJobTitle
+      ? `\n## HARD CONSTRAINT — Career Track: ${currentJobTitle}\n` +
+        `The generated credential MUST directly support career advancement along the "${currentJobTitle}" career track. ` +
+        `Do NOT suggest credentials from an unrelated job function. ` +
+        `EXCEPTION: If the user's CIA goals or the free-text note above explicitly request a career direction change, that signal overrides this constraint.\n`
+      : '';
+
     const prompt = `You are an Education Intelligence Agent generating ONE new education waypoint to insert into a user's education pathway.
-${userGuidanceSection}${credTypesSection}
+
+## HARD CONSTRAINT — Research Market: ${market}
+All credential recommendations, tuition ranges, provider availability, and market context MUST be relevant to the ${market} market. Do not use credentials or pricing from other countries.
+${careerTrackSection}${userGuidanceSection}${credTypesSection}
 PREVIOUS EDUCATION WAYPOINT (position ${afterPosition}):
 ${prevFields}
 
@@ -484,8 +561,8 @@ YEAR CONSTRAINT: The new waypoint's projectedYear MUST be strictly between ${pre
 
 Generate ONE education credential that:
 - Bridges the gap logically between these two waypoints
-- Is a REAL, currently available program
-- Matches the user's evident career direction
+- Is relevant and available in the ${market} market
+- Matches the user's career track (${currentJobTitle || 'as evidenced by the pathway above'})
 - Honors CIA goals as hard constraints
 - Has a projectedYear strictly between the neighbors
 
@@ -504,12 +581,15 @@ Respond with ONLY valid JSON (no markdown, no explanation):
   "salaryRoiPerYear": ...,
   "rationale": "One sentence explaining why this fits this gap",
   "confidence": 0.85,
-  "url": "https://...",
+  "url": "",
   "financialAid": true,
-  "tags": ["tag1", "tag2"]
-}`;
+  "tags": ["tag1", "tag2"],
+  "partnerSites": ["Platform1", "Platform2", "Platform3"]
+}
 
-    // 2. Call Perplexity sonar-pro (same pattern as regenerate-one)
+FOR partnerSites: Return 2-4 platform names that are the BEST places to find this credential in the ${market} market. Use exact names from: Coursera, edX, LinkedIn Learning, Udemy, Internshala, Shiksha, NPTEL, Great Learning, upGrad, FutureLearn, Reed Courses, Alura, Hotmart, Platzi, ALX Africa, GetSmarter, Springboard+, SkillsFuture, Stepik, Skillbox, Edraak, Rwaq, OpenClassrooms, K-MOOC, Schoo.`;
+
+    // 4. Call Perplexity sonar with market-aware system prompt
     const callPerplexityFn = async (p: string) => {
       const perplexityRes = await fetch('https://api.perplexity.ai/chat/completions', {
         method: 'POST',
@@ -518,9 +598,15 @@ Respond with ONLY valid JSON (no markdown, no explanation):
           Authorization: `Bearer ${ENV.PERPLEXITY_API_KEY}`,
         },
         body: JSON.stringify({
-          model: 'sonar-pro',
+          model: 'sonar',
           messages: [
-            { role: 'system', content: 'You are an Education Intelligence Agent. Always respond with valid JSON only — no markdown, no explanation outside the JSON.' },
+            {
+              role: 'system',
+              content:
+                `You are an Education Intelligence Agent specializing in the ${market} education and credential market. ` +
+                `All credentials, tuition ranges, and delivery modes MUST reflect the ${market} market. ` +
+                'Always respond with valid JSON only — no markdown, no explanation outside the JSON.',
+            },
             { role: 'user', content: p },
           ],
           temperature: 0.2,
@@ -579,14 +665,20 @@ Respond with ONLY valid JSON (no markdown, no explanation):
       tuitionMax:      Math.max(tuitionMin, tuitionMax),
       tuitionMidpoint,
       salaryImpactPct: Number(parsed.salaryImpactPct) || 0,
-      salaryRoiPerYear: Number(parsed.salaryRoiPerYear) || 0,
+      salaryRoiPerYear: computeRoi(
+        String(parsed.credentialType || 'course'),
+        Number(parsed.attributionPct) || 0,
+        parsed.unlocksJobPosition != null ? Number(parsed.unlocksJobPosition) : null,
+        Number(parsed.salaryImpactPct) || 0,
+      ),
       rationale:       String(parsed.rationale || ''),
       position:        afterPosition + 0.5,
       status:          'pending',
       confidence:      Math.min(1, Math.max(0, Number(parsed.confidence) || 0.85)),
-      url:             typeof parsed.url === 'string' && (parsed.url as string).startsWith('http') ? String(parsed.url) : undefined,
+      url:             undefined,
       financialAid:    Boolean(parsed.financialAid),
       tags:            Array.isArray(parsed.tags) ? parsed.tags.map(String) : [],
+      partnerSites:    Array.isArray(parsed.partnerSites) ? parsed.partnerSites.map(String) : [],
     });
     await newWp.save();
 
@@ -609,7 +701,7 @@ router.post('/waypoints/replace-with-suggestion', requireApiKey, async (req: Req
       durationMonths: number; tuitionMin: number; tuitionMax: number;
       tuitionMidpoint: number; salaryImpactPct: number; salaryRoiPerYear: number;
       rationale: string; confidence: number; url?: string;
-      financialAid: boolean; tags: string[]; position: number;
+      financialAid: boolean; tags: string[]; partnerSites?: string[]; position: number;
     };
   };
 
@@ -658,9 +750,10 @@ router.post('/waypoints/replace-with-suggestion', requireApiKey, async (req: Req
       status:          'accepted',
       confidence:      suggestion.confidence || 0.85,
       agentRunId:      existing.agentRunId,
-      url:             suggestion.url,
+      url:             undefined,
       financialAid:    suggestion.financialAid || false,
       tags:            suggestion.tags || [],
+      partnerSites:    Array.isArray(suggestion.partnerSites) ? suggestion.partnerSites : [],
     });
     await newWp.save();
 

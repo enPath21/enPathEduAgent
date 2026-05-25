@@ -68,7 +68,7 @@ async function fetchExistingWaypoints(userId: string): Promise<{
   }
 }
 
-async function fetchJobsData(userId: string): Promise<{ salary: number; geoDataSource: string | undefined }> {
+async function fetchJobsData(userId: string): Promise<{ salary: number; geoDataSource: string | undefined; currentJobTitle: string | undefined }> {
   try {
     const res = await fetch(
       `${ENV.JOBS_BACKEND_URL}/api/jobs/user/${userId}`,
@@ -84,16 +84,18 @@ async function fetchJobsData(userId: string): Promise<{ salary: number; geoDataS
     return {
       salary: Number(currentJob?.endingSalary || currentJob?.startingSalary || 0),
       geoDataSource: currentJob?.geoDataSource as string || undefined,
+      currentJobTitle: currentJob?.jobTitle as string || undefined,
     };
   } catch (err) {
     log.warn({ err, userId }, 'Jobs data fetch failed — defaulting to 0/undefined');
-    return { salary: 0, geoDataSource: undefined };
+    return { salary: 0, geoDataSource: undefined, currentJobTitle: undefined };
   }
 }
 
 async function fetchCurrentSalary(userId: string): Promise<number> {
   return (await fetchJobsData(userId)).salary;
 }
+
 
 async function fetchCareerWaypoints(userId: string): Promise<Array<Record<string, unknown>>> {
   try {
@@ -137,7 +139,8 @@ async function fetchCIAContext(userId: string): Promise<CIAContext> {
 
 // ── Perplexity caller ───────────────────────────────────────────
 
-async function callPerplexity(prompt: string): Promise<string> {
+async function callPerplexity(prompt: string, market?: string): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
+  const resolvedMarket = market || 'United States';
   const res = await fetch('https://api.perplexity.ai/chat/completions', {
     method: 'POST',
     headers: {
@@ -145,13 +148,14 @@ async function callPerplexity(prompt: string): Promise<string> {
       Authorization: `Bearer ${ENV.PERPLEXITY_API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'sonar-pro',
+      model: 'sonar',
       messages: [
         {
           role: 'system',
           content:
-            'You are an Education Intelligence Agent. You generate personalized education pathway archetypes — ' +
-            'generic credential types, NOT specific programs at specific institutions. ' +
+            `You are an Education Intelligence Agent specializing in the ${resolvedMarket} education and credential market. ` +
+            `You synthesize education pathway archetypes — generic credential types grounded in ${resolvedMarket} market norms, NOT specific programs at specific institutions. ` +
+            `All tuition ranges, credential availability, delivery modes, and market context MUST reflect the ${resolvedMarket} market. ` +
             'Always respond with valid JSON only — no markdown, no explanation outside the JSON.',
         },
         { role: 'user', content: prompt },
@@ -169,8 +173,13 @@ async function callPerplexity(prompt: string): Promise<string> {
 
   const data = await res.json() as {
     choices: Array<{ message: { content: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
-  return data.choices[0]?.message?.content || '';
+  return {
+    content: data.choices[0]?.message?.content || '',
+    inputTokens: data.usage?.prompt_tokens || 0,
+    outputTokens: data.usage?.completion_tokens || 0,
+  };
 }
 
 // ── Prompt builder ──────────────────────────────────────────────
@@ -183,6 +192,7 @@ function buildEducationPathwayPrompt(
   activeWaypoints: Array<Record<string, unknown>> = [],
   undesiredWaypoints: Array<Record<string, unknown>> = [],
   geoDataSource?: string,
+  currentJobTitle?: string,
 ): string {
   const market = geoDataSource || 'United States';
   const eduLines = educationHistory.length > 0
@@ -223,10 +233,17 @@ function buildEducationPathwayPrompt(
     ? 'unlocksJobPosition is REQUIRED — every credential MUST have unlocksJobPosition set to a waypoint position number (1, 2, 3, etc.). Match the credential to the waypoint it most directly helps unlock. unlocksJobPosition may NOT be null.'
     : 'unlocksJobPosition: use null (no career waypoints mapped yet).';
 
+  const careerTrackConstraint = currentJobTitle
+    ? `\n## HARD CONSTRAINT — Career Track: ${currentJobTitle}\n` +
+      `All credentials MUST directly support career advancement along the "${currentJobTitle}" career track. ` +
+      `Do NOT suggest credentials from an unrelated job function (e.g. do not suggest software engineering bootcamps for a Data Scientist, or finance certs for a Logistics Manager). ` +
+      `EXCEPTION: If the user's CIA goals or user notes explicitly request a career direction change, that signal overrides this constraint.`
+    : '';
+
   return `You are an Education Intelligence Agent. Analyze this user's background and generate a personalized, intelligently-sequenced education pathway.
 
 ## HARD CONSTRAINT — Research Market: ${market}
-All credential recommendations, tuition ranges, provider availability, and market context MUST be relevant to the ${market} market. Do not use credentials or pricing from other countries. CIA goals and user notes may narrow by city or region within ${market} only.
+All credential recommendations, tuition ranges, provider availability, and market context MUST be relevant to the ${market} market. Do not use credentials or pricing from other countries. CIA goals and user notes may narrow by city or region within ${market} only.${careerTrackConstraint}
 
 CURRENT EDUCATION HISTORY:
 ${eduLines}
@@ -292,13 +309,15 @@ Return ONLY valid JSON array:
   "confidence": 0.88,
   "url": "",
   "financialAid": false,
-  "tags": ["Supply Chain", "Certification", "APICS"]
+  "tags": ["Supply Chain", "Certification", "APICS"],
+  "partnerSites": ["Coursera", "edX", "LinkedIn Learning"]
 }]
 
 FIELD RULES:
 - credentialName: generic archetype like "Cloud Architecture Certification" or "Master of Science in Data Science" — never a branded product name
 - institution: always empty string
 - url: always empty string
+- partnerSites: array of 2–4 platform names that are the BEST places for this user to find real versions of this specific credential, based on credentialType + country + city. Use platform names exactly as they appear in the known list. Choose platforms that actually offer this credential type in this market. Known platforms by region (use exact names): Global: Coursera, edX, LinkedIn Learning, Udemy. India: Internshala, Shiksha, NPTEL, Great Learning, upGrad, Coursera, edX. UK: FutureLearn, Reed Courses, Prospects. Australia: Open Universities AU, SEEK Learning, TAFE. Germany: Weiterbildung.de, StudyCheck. France: OpenClassrooms, Mon Compte Formation. Japan: Schoo, Udemy Japan. South Korea: K-MOOC. Brazil: Alura, Hotmart. Mexico/Colombia/Argentina/Chile/Peru: Platzi, Domestika. Nigeria/Kenya: ALX Africa, atingi. South Africa: GetSmarter, ALX Africa. Singapore: SkillsFuture. Ireland: Springboard+. Pakistan: ilmX. Indonesia: Ruangguru. Egypt: Edraak, Rwaq. Russia: Stepik, Skillbox. For degrees specifically, always include at least one platform that lists accredited university programs (e.g. Coursera, edX, Shiksha for India). For certifications, prefer professional certification bodies or platforms with verified certs.
 - credentialType: one of: degree, certification, bootcamp, course, other
 - deliveryMode: one of: online, in-person, hybrid, flexible
 - priority: 1 = required to unlock next career waypoint, 2 = strongly recommended, 3 = optional enhancement
@@ -349,30 +368,28 @@ function parseWaypointResponse(
           tuitionMax: Math.max(tuitionMin, tuitionMax),
           salaryImpactPct: Number(w.salaryImpactPct) || 0,
           salaryRoiPerYear: (() => {
+            const credType = String(w.credentialType || 'unknown').toLowerCase();
+            const attrDefaults: Record<string, number> = { degree: 0.60, certification: 0.30, bootcamp: 0.35, course: 0.10 };
+            let attributionPct = Math.min(1, Math.max(0, Number(w.attributionPct) || 0));
+            if (attributionPct === 0) attributionPct = attrDefaults[credType] ?? 0.20;
             const targetWp = careerWaypoints.find(cw => Number(cw.position) === Number(w.unlocksJobPosition))
               || careerWaypoints[0];
             const waypointSalaryMid = Number(targetWp?.salaryMidpoint || targetWp?.salaryMid || 0);
             const delta = waypointSalaryMid - userCurrentSalary;
-            if (delta <= 0 || !targetWp) return 0;
-            let attributionPct = Math.min(1, Math.max(0, Number(w.attributionPct) || 0));
-            // Default attributionPct by credential type when LLM returns 0 or missing
-            if (attributionPct === 0) {
-              const credType = String(w.credentialType || 'unknown').toLowerCase();
-              const defaults: Record<string, number> = {
-                degree: 0.60,
-                certification: 0.30,
-                bootcamp: 0.35,
-                course: 0.10,
-              };
-              attributionPct = defaults[credType] ?? 0.20;
+            if (targetWp && delta > 0) {
+              // Primary: career waypoint target salary minus current salary
+              return Math.round(delta * attributionPct);
             }
-            return Math.round(delta * attributionPct);
+            // Fallback: no career waypoints — use current salary × salaryImpactPct × attributionPct
+            const salaryImpactPct = Math.min(1, Math.max(0, Number(w.salaryImpactPct) || 0)) / 100;
+            return userCurrentSalary > 0 ? Math.round(userCurrentSalary * salaryImpactPct * attributionPct) : 0;
           })(),
           rationale: String(w.rationale || ''),
           confidence: Math.min(1, Math.max(0, Number(w.confidence) || 0.7)),
-          url: typeof w.url === 'string' && w.url.startsWith('http') ? w.url : undefined,
+          url: undefined,
           financialAid: Boolean(w.financialAid),
           tags: Array.isArray(w.tags) ? w.tags.map(String) : [],
+          partnerSites: Array.isArray(w.partnerSites) ? w.partnerSites.map(String) : [],
           position: i + 1,
           priority: priority ?? undefined,
           unlocksJobPosition: w.unlocksJobPosition != null ? Number(w.unlocksJobPosition) : undefined,
@@ -399,14 +416,21 @@ export async function recalcEduProjections(userId: string): Promise<void> {
   ]);
 
   for (const wp of acceptedWaypoints) {
+    const credType = String(wp.credentialType || 'unknown').toLowerCase();
+    const attrDefaults: Record<string, number> = { degree: 0.60, certification: 0.30, bootcamp: 0.35, course: 0.10 };
+    const attributionPct = attrDefaults[credType] ?? 0.20;
     const targetWp = careerWaypoints.find((cw: Record<string, unknown>) => Number(cw.position) === Number(wp.unlocksJobPosition)) || careerWaypoints[0];
     const waypointSalaryMid = Number((targetWp as Record<string, unknown>)?.salaryMidpoint || (targetWp as Record<string, unknown>)?.salaryMid || 0);
     const delta = waypointSalaryMid - currentSalary;
-    if (delta <= 0 || !targetWp) continue;
-    const credType = String(wp.credentialType || 'unknown').toLowerCase();
-    const defaults: Record<string, number> = { degree: 0.60, certification: 0.30, bootcamp: 0.35, course: 0.10 };
-    const attributionPct = defaults[credType] ?? 0.20;
-    const salaryRoiPerYear = Math.round(delta * attributionPct);
+    let salaryRoiPerYear: number;
+    if (targetWp && delta > 0) {
+      // Primary: career waypoint target salary minus current salary
+      salaryRoiPerYear = Math.round(delta * attributionPct);
+    } else {
+      // Fallback: no career waypoints — use current salary × salaryImpactPct × attributionPct
+      const salaryImpactPct = Math.min(1, Math.max(0, Number(wp.salaryImpactPct) || 0)) / 100;
+      salaryRoiPerYear = currentSalary > 0 ? Math.round(currentSalary * salaryImpactPct * attributionPct) : 0;
+    }
     await EducationWaypointModel.findByIdAndUpdate(wp._id, { $set: { salaryRoiPerYear } });
   }
 }
@@ -517,7 +541,7 @@ export async function runAgentForUser(
   replacingWaypointId?: string,
   credentialTypes: string[] = [],
   lastAcceptedYear?: number,
-): Promise<{ runId: string; waypointCount: number }> {
+): Promise<{ runId: string; waypointCount: number; inputTokens: number; outputTokens: number }> {
   const startedAt = new Date();
 
   // Create run record
@@ -545,6 +569,7 @@ export async function runAgentForUser(
     ]);
     const userCurrentSalary = jobsData.salary;
     const geoDataSource = jobsData.geoDataSource;
+    const currentJobTitle = jobsData.currentJobTitle;
 
     // Update run inputs
     const latestEdu = educationHistory[0];
@@ -559,6 +584,8 @@ export async function runAgentForUser(
 
     // 2. Generate education waypoints
     let rawWaypoints: RawEducationWaypoint[];
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
 
     if (replacingWaypointId) {
       // Single replacement — find rejected waypoint and generate alternative
@@ -566,7 +593,7 @@ export async function runAgentForUser(
       if (!rejected) {
         rawWaypoints = [];
       } else {
-        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired, geoDataSource) +
+        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired, geoDataSource, currentJobTitle) +
           `\n\nIMPORTANT: The user rejected "${rejected.credentialName}". ` +
           `Generate exactly 1 replacement credential for position ${rejected.position} that is meaningfully different. ` +
           `The replacement MUST use projectedYear = ${rejected.projectedYear} (do NOT change the year — the user assigned this slot). ` +
@@ -574,9 +601,13 @@ export async function runAgentForUser(
 
         let content = '';
         for (let attempt = 0; attempt < 2; attempt++) {
-          content = await callPerplexity(
+          const pResult = await callPerplexity(
             attempt === 0 ? prompt : prompt + '\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a JSON array.',
+            geoDataSource,
           );
+          content = pResult.content;
+          totalInputTokens += pResult.inputTokens;
+          totalOutputTokens += pResult.outputTokens;
           const parsed = parseWaypointResponse(content);
           if (parsed.length > 0) {
             // Always lock to the declined waypoint's projectedYear — never let Perplexity reassign it
@@ -596,7 +627,7 @@ export async function runAgentForUser(
         ? acceptedWaypoints.map(w => `- ${w.credentialName} (${w.credentialType}, ~${w.projectedYear})`).join('\n')
         : 'None yet.';
 
-      const basePrompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired, geoDataSource);
+      const basePrompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired, geoDataSource, currentJobTitle);
       const addNewPrompt = basePrompt +
         `\n\nUSER'S ALREADY ACCEPTED CREDENTIALS:\n${acceptedLines}\n\n` +
         `IMPORTANT: The user wants NEW education ideas. Do NOT suggest anything similar to the already-accepted credentials above. ` +
@@ -612,10 +643,13 @@ export async function runAgentForUser(
 
       rawWaypoints = [];
       for (let attempt = 0; attempt < 2; attempt++) {
-        const content = await callPerplexity(
+        const pResult = await callPerplexity(
           attempt === 0 ? addNewPrompt : addNewPrompt + '\n\nCRITICAL: Return EXACTLY 3 waypoint objects in your JSON array. Not 1, not 2 — exactly 3.\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a valid JSON array.',
+          geoDataSource,
         );
-        rawWaypoints = parseWaypointResponse(content, careerWaypoints, userCurrentSalary);
+        totalInputTokens += pResult.inputTokens;
+        totalOutputTokens += pResult.outputTokens;
+        rawWaypoints = parseWaypointResponse(pResult.content, careerWaypoints, userCurrentSalary);
         if (rawWaypoints.length > 0) break;
         log.warn({ attempt }, 'Failed to parse add_new response — retrying');
       }
@@ -624,16 +658,18 @@ export async function runAgentForUser(
       await EducationWaypointModel.deleteMany({ userId });
 
       // Full run — generate 3-5 waypoints
-      let content = '';
       rawWaypoints = [];
       for (let attempt = 0; attempt < 2; attempt++) {
-        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired, geoDataSource);
-        content = await callPerplexity(
+        const prompt = buildEducationPathwayPrompt(educationHistory, careerWaypoints, ciaContext, userCurrentSalary, existingWaypoints.active, existingWaypoints.undesired, geoDataSource, currentJobTitle);
+        const pResult = await callPerplexity(
           attempt === 0 ? prompt : prompt + '\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY a valid JSON array.',
+          geoDataSource,
         );
-        rawWaypoints = parseWaypointResponse(content, careerWaypoints, userCurrentSalary);
+        totalInputTokens += pResult.inputTokens;
+        totalOutputTokens += pResult.outputTokens;
+        rawWaypoints = parseWaypointResponse(pResult.content, careerWaypoints, userCurrentSalary);
         if (rawWaypoints.length > 0) break;
-        log.warn({ attempt, contentPreview: content.slice(0, 200) }, 'Failed to parse pathway response — retrying');
+        log.warn({ attempt, contentPreview: pResult.content.slice(0, 200) }, 'Failed to parse pathway response — retrying');
       }
     }
 
@@ -681,9 +717,10 @@ export async function runAgentForUser(
         status: 'pending',
         agentRunId: runId,
         confidence: raw.confidence,
-        url: raw.url,
+        url: undefined,
         financialAid: raw.financialAid,
         tags: raw.tags,
+        partnerSites: Array.isArray(raw.partnerSites) ? raw.partnerSites.map(String) : [],
         priority:           raw.priority ?? null,
         unlocksJobPosition: raw.unlocksJobPosition ?? null,
         sequenceRationale:  raw.sequenceRationale ?? null,
@@ -745,7 +782,7 @@ export async function runAgentForUser(
     }
 
     log.info({ runId, userId, waypointCount: savedIds.length }, 'Agent run completed');
-    return { runId, waypointCount: savedIds.length };
+    return { runId, waypointCount: savedIds.length, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
 
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
