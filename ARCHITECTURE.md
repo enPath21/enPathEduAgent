@@ -28,8 +28,21 @@ The Career Intelligence Agent (enPathCIA) provides goal-aware context for waypoi
 ## Agent Rules
 
 - **Never delete existing waypoints on re-run.** A re-run recalculates numbers (salary ROI, timeline) but does not add, remove, or reorder existing pathway items.
-- **Add exactly 1 item when the user requests a new suggestion.** The agent appends a single new waypoint — it never bulk-generates replacements.
+- **Add exactly 3 items on user insert (`add_new`).** Appends 3 new pending waypoints without touching existing pending or accepted items.
+- **Pending items persist indefinitely.** Pending waypoints are never auto-deleted. They remain until the user explicitly accepts or declines them, even if the user returns weeks or months later.
 - Auto-run = recalc numbers only; never touch pathway items.
+
+## Agent Run Guard (CRITICAL)
+
+`runAgentForUser` in `agent.service.ts` blocks any run where trigger is not `feedback_replacement` or `add_new` and no `replacingWaypointId` is present. This is the primary protection against stale BullMQ jobs firing on Cloud Run cold-start and wiping user waypoints.
+
+**Valid production triggers:**
+- `feedback_replacement` + `replacingWaypointId` — user clicked "Suggest Another" on a pending card (1-for-1 swap)
+- `add_new` — user clicked "Insert New Education Item" (appends 3 new pending items, never deletes anything)
+
+**All other triggers are blocked** (`manual`, `scheduled`, `cia_notification`, etc.) — ghost runs from stale Redis queue jobs.
+
+The `add_new` path never calls `deleteMany` — it only appends. Accepted and existing pending items are always preserved.
 
 ## Education Matches
 
