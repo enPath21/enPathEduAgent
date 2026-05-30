@@ -542,6 +542,12 @@ export async function runAgentForUser(
   credentialTypes: string[] = [],
   lastAcceptedYear?: number,
 ): Promise<{ runId: string; waypointCount: number; inputTokens: number; outputTokens: number }> {
+  // Block ghost runs — only feedback_replacement and add_new are valid in production
+  if (trigger !== 'feedback_replacement' && trigger !== 'add_new' && !replacingWaypointId) {
+    log.warn({ userId, trigger }, 'Full run blocked: only feedback_replacement and add_new triggers are permitted in production');
+    return { runId: '', waypointCount: 0, inputTokens: 0, outputTokens: 0 };
+  }
+
   const startedAt = new Date();
 
   // Create run record
@@ -618,9 +624,7 @@ export async function runAgentForUser(
         rawWaypoints = rawWaypoints! || [];
       }
     } else if (trigger === 'add_new') {
-      // Add New — fetch already-accepted waypoints and suggest NEW/DIFFERENT ones
-      // Clean existing waypoints before fresh run (prevents duplicate accumulation)
-      await EducationWaypointModel.deleteMany({ userId });
+      // Add New — append 3 new suggestions without touching existing items
 
       const acceptedWaypoints = await EducationWaypointModel.find({ userId, status: 'accepted' }).lean();
       const acceptedLines = acceptedWaypoints.length > 0
@@ -654,8 +658,7 @@ export async function runAgentForUser(
         log.warn({ attempt }, 'Failed to parse add_new response — retrying');
       }
     } else {
-      // Full run — clean existing waypoints to prevent duplicate accumulation
-      await EducationWaypointModel.deleteMany({ userId });
+      // Full run — unreachable in production (blocked by guard above)
 
       // Full run — generate 3-5 waypoints
       rawWaypoints = [];
