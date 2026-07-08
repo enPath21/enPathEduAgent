@@ -21,6 +21,7 @@ import { createLogger } from '../config/logger';
 import { recalcEduProjections } from '../services/agent.service';
 import { findEducationMatches } from '../services/educationMatch.service';
 import { postAuditEvent } from '../services/agent.service';
+import { enrichCredential } from '../services/credentialEnrichment.service';
 import type { UserProfile, CIAContext } from '../types';
 
 const log = createLogger('agent-routes');
@@ -872,6 +873,84 @@ router.get('/education-matches/:userId', requireApiKey, async (req: Request, res
   } catch (err) {
     log.error({ err, userId }, 'Failed to find education matches');
     res.status(500).json({ error: 'Failed to find education matches', matches: [] });
+  }
+});
+
+// ── POST /api/agent/enrich-credential ──────────────────────────
+// Estimates financial fields (tuition, duration, salary impact, ROI) for an
+// arbitrary credential — used by Edu BE to enrich EducationItem records
+// (history) on create/update. Same enrichment brain that produces future
+// archetype financials, applied to already-completed credentials.
+router.post('/enrich-credential', requireApiKey, async (req: Request, res: Response) => {
+  const {
+    userId,
+    credentialName,
+    institution,
+    credentialType,
+    startDate,
+    endDate,
+    location,
+    deliveryMode,
+    isHistorical,
+  } = req.body as {
+    userId: string;
+    credentialName: string;
+    institution?: string;
+    credentialType?: string;
+    startDate?: string | null;
+    endDate?: string | null;
+    location?: string;
+    deliveryMode?: string;
+    isHistorical?: boolean;
+  };
+
+  if (!userId || !credentialName) {
+    res.status(400).json({ error: 'userId and credentialName are required' });
+    return;
+  }
+
+  try {
+    // Pull user job context (market, salary, career waypoints) — same shape
+    // insert-waypoint uses. Enrichment ROI is anchored to this context.
+    const [jobContext, careerWaypointsRes] = await Promise.all([
+      fetchUserJobContext(userId, ENV.INTERNAL_API_KEY, ENV.JOBS_BACKEND_URL),
+      fetch(`${ENV.JOBS_BACKEND_URL}/api/jobs/waypoints/${userId}`, {
+        headers: { 'x-api-key': ENV.INTERNAL_API_KEY },
+        signal: AbortSignal.timeout(5000),
+      }).then(r => r.ok ? r.json() as Promise<{ waypoints?: Array<Record<string, unknown>> }> : { waypoints: [] })
+        .catch(() => ({ waypoints: [] as Array<Record<string, unknown>> })),
+    ]);
+
+    const careerWaypoints: Array<Record<string, unknown>> =
+      (careerWaypointsRes as { waypoints?: Array<Record<string, unknown>> }).waypoints || [];
+
+    const enrichment = await enrichCredential(
+      {
+        credentialName,
+        institution,
+        credentialType,
+        startDate,
+        endDate,
+        location,
+        deliveryMode,
+        isHistorical: Boolean(isHistorical),
+      },
+      {
+        market: jobContext.geoDataSource,
+        currentJobTitle: jobContext.currentJobTitle,
+        currentSalary: jobContext.currentSalary,
+        careerWaypoints,
+      },
+    );
+
+    log.info(
+      { userId, credentialName, isHistorical: Boolean(isHistorical), confidence: enrichment.confidence },
+      'Credential enriched',
+    );
+    res.json({ ...enrichment, enrichedAt: new Date().toISOString() });
+  } catch (err) {
+    log.error({ err, userId, credentialName }, 'Failed to enrich credential');
+    res.status(500).json({ error: 'Failed to enrich credential' });
   }
 });
 
