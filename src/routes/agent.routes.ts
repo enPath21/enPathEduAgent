@@ -22,6 +22,15 @@ import { recalcEduProjections } from '../services/agent.service';
 import { findEducationMatches } from '../services/educationMatch.service';
 import { postAuditEvent } from '../services/agent.service';
 import { enrichCredential } from '../services/credentialEnrichment.service';
+import {
+  researchJobCredentialAttribution,
+  normalizeJobTitle,
+  credentialFingerprint,
+  type CredentialInput,
+  type JobInput,
+  type Attribution,
+} from '../services/jobCredentialAttribution.service';
+import { AttributionCacheModel } from '../models/attributionCache.model';
 import type { UserProfile, CIAContext } from '../types';
 
 const log = createLogger('agent-routes');
@@ -951,6 +960,115 @@ router.post('/enrich-credential', requireApiKey, async (req: Request, res: Respo
   } catch (err) {
     log.error({ err, userId, credentialName }, 'Failed to enrich credential');
     res.status(500).json({ error: 'Failed to enrich credential' });
+  }
+});
+
+// ── POST /api/agent/enrich-job-credentials ──────────────────────
+// For a specific job (or waypoint archetype) and a set of credentials a user
+// holds, return necessity (required/preferred/irrelevant) + weight per
+// credential. Called by Edu BE at Edu-dashboard read time to compute salary
+// attribution against TYE.
+//
+// Global cache keyed by (market, normalizedJobTitle, credentialFingerprint).
+// See edu-salary-attribution-spec.md.
+router.post('/enrich-job-credentials', requireApiKey, async (req: Request, res: Response) => {
+  const {
+    market,
+    job,
+    credentials,
+  } = req.body as {
+    market?: string;
+    job?: JobInput;
+    credentials?: CredentialInput[];
+  };
+
+  if (!market || !job || !job.title || !Array.isArray(credentials)) {
+    res.status(400).json({ error: 'market, job.title, and credentials[] are required' });
+    return;
+  }
+
+  try {
+    const normalizedTitle = normalizeJobTitle(job.title);
+    const fingerprint     = credentialFingerprint(credentials);
+
+    // Cache lookup
+    const cached = await AttributionCacheModel.findOne({
+      market,
+      normalizedJobTitle:    normalizedTitle,
+      credentialFingerprint: fingerprint,
+    }).lean();
+
+    if (cached) {
+      const ageMs = Date.now() - new Date(cached.createdAt).getTime();
+      const ttlMs = (cached.ttlDays || 180) * 24 * 60 * 60 * 1000;
+      if (ageMs < ttlMs) {
+        // Map cached (by credentialName) → credentialIds in this request
+        const attributions: Attribution[] = [];
+        for (const c of credentials) {
+          const match = cached.attributions.find(
+            a => a.credentialName.toLowerCase() === c.name.toLowerCase(),
+          );
+          if (match) {
+            attributions.push({
+              credentialId:   c.credentialId,
+              credentialName: c.name,
+              necessity:      match.necessity,
+              weight:         match.weight,
+              confidence:     match.confidence,
+              reasoning:      match.reasoning,
+            });
+          }
+        }
+        log.info({ jobTitle: job.title, credentialCount: credentials.length, cacheHit: true }, 'Attribution cache hit');
+        res.json({
+          jobTitle:    job.title,
+          attributions,
+          cacheHit:    true,
+          cachedAt:    cached.createdAt,
+        });
+        return;
+      }
+    }
+
+    // Cache miss (or expired) — research via Perplexity
+    const attributions = await researchJobCredentialAttribution(market, job, credentials);
+
+    // Upsert into cache keyed by name (not id) so future users hit it
+    await AttributionCacheModel.findOneAndUpdate(
+      { market, normalizedJobTitle: normalizedTitle, credentialFingerprint: fingerprint },
+      {
+        $set: {
+          market,
+          normalizedJobTitle:    normalizedTitle,
+          credentialFingerprint: fingerprint,
+          attributions: attributions.map(a => ({
+            credentialName: a.credentialName,
+            necessity:      a.necessity,
+            weight:         a.weight,
+            confidence:     a.confidence,
+            reasoning:      a.reasoning,
+          })),
+          ttlDays:   180,
+          createdAt: new Date(),
+        },
+      },
+      { upsert: true, new: true },
+    );
+
+    log.info(
+      { jobTitle: job.title, credentialCount: credentials.length, cacheHit: false },
+      'Attribution enriched and cached',
+    );
+
+    res.json({
+      jobTitle:    job.title,
+      attributions,
+      cacheHit:    false,
+      cachedAt:    new Date(),
+    });
+  } catch (err) {
+    log.error({ err, jobTitle: job?.title }, 'Failed to enrich job × credential attribution');
+    res.status(500).json({ error: 'Failed to enrich attribution' });
   }
 });
 
